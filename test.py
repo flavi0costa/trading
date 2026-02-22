@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # 1. CONFIGURAÇÃO DA PÁGINA
-st.set_page_config(page_title="Predator Pro Ultra: Tactical Edition", layout="wide")
+st.set_page_config(page_title="Predator Pro Ultimate", layout="wide")
 
 # --- LISTA TOP 50 SP500 ---
 TOP_50_SP500 = [
@@ -23,15 +23,17 @@ multiplicador_stop = st.sidebar.slider("Multiplicador Stop Loss (ATR)", 1.0, 3.5
 multiplicador_alvo = st.sidebar.slider("Multiplicador Alvo (ATR)", 2.0, 6.0, 4.0, 0.5)
 rsi_limite = st.sidebar.slider("RSI Sobrecompra", 60, 80, 70)
 
-# --- FUNÇÃO TÉCNICA ROBUSTA ---
+st.sidebar.markdown("---")
+st.sidebar.header("💰 Simulador de Profit")
+capital_total = st.sidebar.number_input("Capital Disponível ($)", value=10000)
+risco_por_trade = st.sidebar.slider("Risco por Trade (%)", 0.5, 5.0, 1.0, 0.5)
+
+# --- FUNÇÃO TÉCNICA ---
 def processar_dados_completo(ticker):
     try:
-        # Baixa ativo + SPY para comparação de força
         data = yf.download([ticker, 'SPY'], period="2y", interval="1d", progress=False)
-        
         if data.empty: return None
         
-        # Ajuste para o novo formato do yfinance
         df = data['Close'][[ticker]].rename(columns={ticker: 'Close'})
         df['High'] = data['High'][ticker]
         df['Low'] = data['Low'][ticker]
@@ -39,36 +41,32 @@ def processar_dados_completo(ticker):
         df['Volume'] = data['Volume'][ticker]
         df['SPY_Close'] = data['Close']['SPY']
 
-        # Indicadores Base
         df['EMA_200'] = ta.ema(df['Close'], length=200)
         df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
         df['RSI'] = ta.rsi(df['Close'], length=14)
         
-        # Bandas de Bollinger (Captura dinâmica de nomes)
         bb = ta.bbands(df['Close'], length=20, std=2)
         df = pd.concat([df, bb], axis=1)
         
-        # TTM Squeeze
         sqz = ta.squeeze(df['High'], df['Low'], df['Close'])
         if sqz is not None: df = pd.concat([df, sqz], axis=1)
         
-        # Fluxo Institucional
         df['Vol_Avg'] = df['Volume'].rolling(window=20).mean()
         df['RVOL'] = df['Volume'] / df['Vol_Avg']
         df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
         
         return df
     except Exception as e:
-        st.error(f"Erro ao processar: {e}")
+        st.error(f"Erro: {e}")
         return None
 
 # --- UI ---
-st.title("🏹 Predator Pro: Full Tactical Dashboard")
-tab1, tab2 = st.tabs(["🚀 Scanner Top 50", "🔍 Análise Manual + Força Relativa"])
+st.title("🏹 Predator Pro Ultimate")
+tab1, tab2 = st.tabs(["🚀 Scanner Top 50", "🔍 Análise Manual & Profit"])
 
 # --- ABA 1: SCANNER ---
 with tab1:
-    if st.button("🚀 Executar Varredura"):
+    if st.button("🚀 Iniciar Varredura"):
         resultados = []
         bar = st.progress(0)
         for i, t in enumerate(TOP_50_SP500):
@@ -80,71 +78,76 @@ with tab1:
                     resultados.append({
                         "Ticker": t, "Preço": round(float(u['Close']), 2),
                         "RSI": round(float(u['RSI']), 1), "RVOL": round(float(u['RVOL']), 2),
-                        "Estado": "🔥 ROMPEU" if u['SQZ_ON'] == 0 else "🟡 SQUEEZE"
+                        "MFI": round(float(u['MFI']), 0),
+                        "Sinal": "🔥 ROMPEU" if u['SQZ_ON'] == 0 else "🟡 SQUEEZE"
                     })
             bar.progress((i + 1) / len(TOP_50_SP500))
         if resultados: st.dataframe(pd.DataFrame(resultados), use_container_width=True)
-        else: st.info("Nenhum sinal detectado.")
+        else: st.info("Sem sinais claros agora.")
 
-# --- ABA 2: MANUAL ---
+# --- ABA 2: MANUAL & SIMULADOR ---
 with tab2:
     ticker_user = st.text_input("Ticker", "NVDA").upper()
-    if st.button("Analisar"):
+    if st.button("Analisar & Calcular Profit"):
         df = processar_dados_completo(ticker_user)
         if df is not None:
             df_plot = df.tail(126)
             u = df_plot.iloc[-1]
             
-            # Identificar colunas das Bandas (Fix para o KeyError)
+            # Colunas Bollinger
             col_bbu = [c for c in df_plot.columns if c.startswith('BBU')][0]
             col_bbl = [c for c in df_plot.columns if c.startswith('BBL')][0]
             
+            # Gestão de Risco
             stop = float(u['Close'] - (u['ATR'] * multiplicador_stop))
             alvo = float(u['Close'] + (u['ATR'] * multiplicador_alvo))
+            distancia_stop = u['Close'] - stop
             
-            # Métricas
+            # SIMULADOR FINANCEIRO
+            valor_em_risco = capital_total * (risco_por_trade / 100)
+            quantidade = int(valor_em_risco / distancia_stop) if distancia_stop > 0 else 0
+            custo_posicao = quantidade * u['Close']
+            lucro_potencial = quantidade * (alvo - u['Close'])
+            racio_rr = (alvo - u['Close']) / distancia_stop
+            
+            # Painel Superior
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Preço", f"{u['Close']:.2f}")
-            c2.metric("RSI", f"{u['RSI']:.1f}")
-            c3.metric("Stop ATR", f"{stop:.2f}")
-            c4.metric("Alvo ATR", f"{alvo:.2f}")
+            c2.metric("Quantidade Sugerida", f"{quantidade} un")
+            c3.metric("Lucro Potencial", f"${lucro_potencial:.2f}")
+            c4.metric("Rácio R:R", f"1:{racio_rr:.1f}")
 
-            # Subplots
+            # Gráfico
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
-
-            # Gráfico Principal
             fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'], low=df_plot['Low'], close=df_plot['Close'], name="Price"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[col_bbu], name="BB Upper", line=dict(color='rgba(173, 216, 230, 0.4)', dash='dot')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[col_bbl], name="BB Lower", line=dict(color='rgba(173, 216, 230, 0.4)', dash='dot')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[col_bbu], name="BB Upper", line=dict(color='rgba(173, 216, 230, 0.3)', dash='dot')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[col_bbl], name="BB Lower", line=dict(color='rgba(173, 216, 230, 0.3)', dash='dot')), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA_200'], name="EMA 200", line=dict(color='yellow')), row=1, col=1)
             
             fig.add_hline(y=stop, line_dash="dash", line_color="red", row=1, col=1)
             fig.add_hline(y=alvo, line_dash="dash", line_color="green", row=1, col=1)
 
-            # RSI
             fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['RSI'], name="RSI", line=dict(color='purple')), row=2, col=1)
-            fig.add_hline(y=rsi_limite, line_dash="dot", line_color="red", row=2, col=1)
-            fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-
-            # Volume
             fig.add_trace(go.Bar(x=df_plot.index, y=df_plot['Volume'], name="Volume"), row=3, col=1)
 
-            fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=850)
+            fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=900)
             st.plotly_chart(fig, use_container_width=True)
 
-            # DIAGNÓSTICO
-            st.subheader("🏁 Veredito Predator")
-            correlacao = df['Close'].tail(20).corr(df['SPY_Close'].tail(20))
+            # DIAGNÓSTICO FINAL
+            st.subheader("📋 Plano de Trade & Veredito")
+            d1, d2, d3 = st.columns(3)
+            with d1:
+                st.write(f"**Custo da Posição:** ${custo_posicao:.2f}")
+                st.write(f"**Risco Financeiro:** ${valor_em_risco:.2f}")
+            with d2:
+                correl = df['Close'].tail(20).corr(df['SPY_Close'].tail(20))
+                st.write(f"**Correlação SPY:** {correl:.2f}")
+                st.write(f"**MFI (Money Flow):** {u['MFI']:.0f}")
+            with d3:
+                if u['SQZ_ON'] == 1: st.warning("⚠️ Aguarde rompimento do Squeeze.")
+                elif u['RSI'] > rsi_limite: st.error("⚠️ Sobrecomprado. Risco de queda.")
+                else: st.success("✅ Condições favoráveis para entrada.")
             
-            c_res1, c_res2 = st.columns(2)
-            with c_res1:
-                if correlacao > 0.8: st.info(f"🔗 Correlação Alta com S&P 500 ({correlacao:.2f})")
-                else: st.success(f"💪 Força Relativa: O ativo move-se independente do mercado ({correlacao:.2f})")
-                
             
-            with c_res2:
-                if u['RSI'] > rsi_limite: st.warning("⚠️ SOBRECOMPRADO: RSI alto, aguarde recuo.")
-                elif u['RSI'] < 35: st.success("🟢 SOBREVENDIDO: Potencial ponto de entrada por exaustão.")
-                
 
-        else: st.error("Erro ao carregar dados.")
+        else: st.error("Erro nos dados.")
