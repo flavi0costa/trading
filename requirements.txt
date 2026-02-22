@@ -1,4 +1,6 @@
-yfinance
-pandas
-pandas-ta
+altair==4.2.2
 streamlit
+yfinance
+pandas-ta
+plotly
+pandas
