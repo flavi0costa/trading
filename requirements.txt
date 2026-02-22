@@ -2,3 +2,4 @@ yfinance
 pandas
 pandas-ta
 streamlit
+pip install --upgrade streamlit altair pandas
