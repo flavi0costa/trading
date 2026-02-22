@@ -2,4 +2,3 @@ yfinance
 pandas
 pandas-ta
 streamlit
-plotly
