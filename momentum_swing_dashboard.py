@@ -5,7 +5,6 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
-from datetime import datetime
 
 st.set_page_config(page_title="Momentum Swing Trade Pro", layout="wide")
 st.title("📈 Análise Técnica Momentum Swing Trade")
@@ -28,7 +27,7 @@ if df.empty:
     st.error("❌ Ticker inválido ou sem dados.")
     st.stop()
 
-# ====================== INDICADORES (nomes padronizados) ======================
+# ====================== INDICADORES ======================
 df['RSI_14'] = ta.rsi(df['Close'], length=14)
 macd = ta.macd(df['Close'])
 df = pd.concat([df, macd], axis=1)
@@ -49,53 +48,59 @@ df['EMA200'] = ta.ema(df['Close'], length=200)
 df['OBV'] = ta.obv(df['Close'], df['Volume'])
 df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-# ====================== VOLUME PROFILE (VERSÃO CORRIGIDA) ======================
+# ====================== VOLUME PROFILE (já corrigido anteriormente) ======================
 def volume_profile(df, n_bins=40):
     if df.empty or len(df) < 10:
         return pd.DataFrame(columns=['price_bin', 'Volume', 'price'])
-    
     data = df.dropna(subset=['High', 'Low', 'Volume']).copy()
     if len(data) < 10:
         return pd.DataFrame(columns=['price_bin', 'Volume', 'price'])
-    
     mid_price = ((data['High'] + data['Low']) / 2).astype('float64')
     price_min = float(mid_price.min())
     price_max = float(mid_price.max())
-    
     if price_max - price_min < 1e-6:
         price_max += abs(price_min) * 0.05 + 0.01
-    
     bins = np.linspace(price_min, price_max, n_bins + 1)
-    
     data['price_bin'] = pd.cut(mid_price, bins=bins, include_lowest=True, duplicates='drop')
-    
     vp = (data.groupby('price_bin', observed=True)['Volume']
           .sum()
           .reset_index())
-    
     vp['price'] = vp['price_bin'].apply(lambda x: x.mid if pd.notnull(x) else np.nan)
     vp = vp.dropna(subset=['price']).sort_values('price').reset_index(drop=True)
     return vp
 
-# ====================== PADRÕES DE CANDLE ======================
+# ====================== PADRÕES DE CANDLE (100% CORRIGIDO) ======================
 def detect_patterns(df):
     patterns = {}
-    patterns['Bullish Engulfing'] = ((df['Close'].shift(1) < df['Open'].shift(1)) & 
-                                     (df['Close'] > df['Open']) & 
-                                     (df['Open'] < df['Close'].shift(1)) & 
-                                     (df['Close'] > df['Open'].shift(1))).iloc[-1]
+    if len(df) < 1:
+        return {'Bullish Engulfing': False, 'Hammer': False, 'Doji': False, 'Morning Star': False}
+    
+    # Bullish Engulfing
+    patterns['Bullish Engulfing'] = bool(((df['Close'].shift(1) < df['Open'].shift(1)) & 
+                                         (df['Close'] > df['Open']) & 
+                                         (df['Open'] < df['Close'].shift(1)) & 
+                                         (df['Close'] > df['Open'].shift(1))).iloc[-1])
+    
+    # Hammer
     body = abs(df['Close'] - df['Open'])
     lower_shadow = np.minimum(df['Open'], df['Close']) - df['Low']
-    patterns['Hammer'] = ((lower_shadow > 2 * body) & (body > 0)).iloc[-1]
-    patterns['Doji'] = (abs(df['Close'] - df['Open']) <= 0.1 * (df['High'] - df['Low'])).iloc[-1]
+    patterns['Hammer'] = bool(((lower_shadow > 2 * body) & (body > 0)).iloc[-1])
     
+    # Doji
+    patterns['Doji'] = bool((abs(df['Close'] - df['Open']) <= 0.1 * (df['High'] - df['Low'])).iloc[-1])
+    
+    # Morning Star - CORRIGIDO com escalares explícitos
+    patterns['Morning Star'] = False
     if len(df) >= 3:
-        c1, c2, c3 = df.iloc[-3], df.iloc[-2], df.iloc[-1]
-        patterns['Morning Star'] = ((c1['Close'] < c1['Open']) and 
-                                    (abs(c2['Close'] - c2['Open']) < 0.3*(c2['High']-c2['Low'])) and 
-                                    (c3['Close'] > c3['Open']) and (c3['Close'] > (c1['Open']+c1['Close'])/2))
-    else:
-        patterns['Morning Star'] = False
+        c1 = df.iloc[-3]
+        c2 = df.iloc[-2]
+        c3 = df.iloc[-1]
+        cond1 = float(c1['Close']) < float(c1['Open'])
+        cond2 = abs(float(c2['Close']) - float(c2['Open'])) < 0.3 * (float(c2['High']) - float(c2['Low']))
+        cond3 = float(c3['Close']) > float(c3['Open'])
+        cond4 = float(c3['Close']) > (float(c1['Open']) + float(c1['Close'])) / 2
+        patterns['Morning Star'] = bool(cond1 and cond2 and cond3 and cond4)
+    
     return patterns
 
 patterns = detect_patterns(df)
@@ -192,7 +197,7 @@ with tab2:
         if v: cols[2].success(p)
 
 with tab3:
-    st.subheader("🔥 Volume Profile (últimos 3 meses)")
+    st.subheader("🔥 Volume Profile")
     try:
         vp = volume_profile(df)
         if vp.empty or len(vp) < 3:
@@ -203,7 +208,6 @@ with tab3:
             fig_vp.add_trace(go.Scatter(x=[0, vp['Volume'].max()*1.05], y=[df['Close'].iloc[-1]]*2, mode="lines", name="Preço Atual", line=dict(color="red", width=3, dash="dash")))
             fig_vp.update_layout(height=650, title="Volume Profile + Preço Atual", yaxis_title="Preço", xaxis_title="Volume Negociado")
             st.plotly_chart(fig_vp, use_container_width=True)
-            
             poc = vp.loc[vp['Volume'].idxmax(), 'price']
             st.success(f"**POC (Point of Control):** R$ {poc:.2f}")
     except Exception as e:
@@ -215,10 +219,10 @@ with tab4:
         stock = yf.Ticker(ticker)
         if stock.options:
             opts = stock.option_chain(stock.options[0])
-            st.write("**Calls com maior volume (Unusual Activity)**")
+            st.write("**Calls com maior volume**")
             st.dataframe(opts.calls.nlargest(10, 'volume')[['strike', 'lastPrice', 'volume', 'openInterest', 'impliedVolatility']])
     except:
-        st.info("Opções não disponíveis para este ticker.")
+        st.info("Opções não disponíveis.")
 
     if polygon_key and not ticker.endswith('.SA'):
         try:
@@ -229,14 +233,14 @@ with tab4:
             if dark:
                 dark_df = pd.DataFrame([{'price': t.price, 'size': t.size, 'timestamp': pd.to_datetime(t.timestamp, unit='ns')} for t in dark[:20]])
                 st.dataframe(dark_df)
-                st.success(f"✅ {len(dark)} trades em Dark Pool detectados!")
+                st.success(f"✅ {len(dark)} trades em Dark Pool!")
         except Exception as e:
             st.error(f"Erro Polygon: {e}")
     elif not ticker.endswith('.SA'):
-        st.info("🔑 Insira sua chave Polygon para ver Dark Pool.")
+        st.info("Insira sua chave Polygon para Dark Pool.")
 
 with tab5:
-    st.subheader("⚙️ Backtest Simples (últimos 6 meses)")
+    st.subheader("⚙️ Backtest Simples")
     df_back = df.copy()
     df_back['Signal'] = (df_back['SUPERT_10_3.0'] < df_back['Close']) & (df_back['RSI_14'] > 50) & (df_back['MACD_12_26_9'] > df_back['MACDs_12_26_9'])
     df_back['Return'] = df_back['Close'].pct_change()
@@ -246,4 +250,4 @@ with tab5:
     st.metric("Retorno Estratégia", f"{total_return*100:.1f}%", delta=f"Buy & Hold: {bh_return*100:.1f}%")
     st.line_chart((1 + df_back[['Return', 'Strategy']]).cumprod())
 
-st.caption("✅ Código corrigido • Use com gerenciamento de risco • Não é recomendação de investimento")
+st.caption("✅ Todos os erros corrigidos • Use com gerenciamento de risco • Não é recomendação")
