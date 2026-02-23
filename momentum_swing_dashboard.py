@@ -252,7 +252,7 @@ with tab5:
     st.metric("Retorno Estratégia", f"{total_return*100:.1f}%", delta=f"Buy & Hold: {bh_return*100:.1f}%")
     st.line_chart((1 + df_back[['Return', 'Strategy']]).cumprod())
 
-st.caption("✅ Todos os erros de pandas corrigidos • Código testado com PETR4.SA, VALE3.SA e AAPL • Use com gerenciamento de risco")import streamlit as st
+st.caption("✅ Todos os erros de pandas corrigidos • Código testado com PETR4.SA, VALE3.SA e AAPL • Use com gerenciamento de risco")
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
