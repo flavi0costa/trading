@@ -9,14 +9,19 @@ warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="Momentum Swing Dashboard", layout="wide")
 st.title("🔥 Momentum Swing Dashboard - US Market")
-st.markdown("**VERSÃO DEFINITIVA • Erro 'truth value of a Series' ELIMINADO**")
+st.markdown("**VERSÃO DEFINITIVA • yfinance NaN FIXADO**")
 
 # ====================== FUNÇÕES ======================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)  # cache mais curto para dados frescos
 def baixar_dados(ticker, weekly_max=False):
     df_d = yf.download(ticker, period="1y", interval="1d", progress=False)
     period_w = "max" if weekly_max else "5y"
     df_w = yf.download(ticker, period=period_w, interval="1wk", progress=False)
+    
+    # 🔥 FIX PRINCIPAL: remove linha incompleta (dia/semana atual com NaN)
+    df_d = df_d.dropna(subset=['Close']).ffill()
+    df_w = df_w.dropna(subset=['Close']).ffill()
+    
     return df_d, df_w
 
 def adicionar_indicadores(df):
@@ -26,8 +31,8 @@ def adicionar_indicadores(df):
     df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
     df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-    df['SMA50'] = df['Close'].rolling(50).mean()
-    df['SMA200'] = df['Close'].rolling(200).mean()
+    df['SMA50'] = df['Close'].rolling(50, min_periods=1).mean()   # nunca NaN
+    df['SMA200'] = df['Close'].rolling(200, min_periods=1).mean() # nunca NaN
     
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
@@ -49,8 +54,8 @@ def adicionar_indicadores(df):
     tr = pd.concat([df['High']-df['Low'], 
                     (df['High']-df['Close'].shift()).abs(), 
                     (df['Low']-df['Close'].shift()).abs()], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(14).mean()
-    df['Vol_Avg'] = df['Volume'].rolling(20).mean()
+    df['ATR'] = tr.rolling(14, min_periods=1).mean()
+    df['Vol_Avg'] = df['Volume'].rolling(20, min_periods=1).mean()
     return df
 
 def detectar_padroes_candle(df):
@@ -85,8 +90,8 @@ def get_weekly_score(df_w, last_w_dict):
     if pd.isna(sma200):
         if pd.notna(sma50):
             score = 1 if close > sma50 else -1
-            return score, "🟡 SMA200 indisponível (usando SMA50)"
-        return 0, "📉 Sem médias longas"
+            return score, "🟡 Usando SMA50"
+        return 0, "📉 Sem médias"
     
     if close > sma200:
         score = 2 if pd.notna(sma50) and sma50 > sma200 else 1
@@ -120,15 +125,15 @@ tab1, tab2 = st.tabs(["📊 Analisador Individual", "🔍 Scanner de Mercado"])
 with tab1:
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker = st.text_input("Digite o ticker (ex: T, WMT, LUV, AAPL, NVDA)", "WMT").strip().upper()
+        ticker = st.text_input("Digite o ticker (ex: NVDA, T, WMT, LUV, AAPL)", "NVDA").strip().upper()
     with col2:
         if st.button("🚀 ANALISAR TICKER", type="primary", use_container_width=True):
             with st.spinner(f"Analisando {ticker}..."):
                 try:
                     df_daily, df_weekly = baixar_dados(ticker, weekly_max=True)
                     
-                    if df_daily.empty or len(df_daily) < 30:
-                        st.error("❌ Ticker sem dados suficientes.")
+                    if df_daily.empty or len(df_daily) < 20:
+                        st.error("❌ Sem dados suficientes.")
                         st.stop()
 
                     df_daily = adicionar_indicadores(df_daily)
@@ -136,12 +141,12 @@ with tab1:
                     
                     last_d = df_daily.iloc[-1]
                     last_w = df_weekly.iloc[-1]
-                    last_d_dict = last_d.to_dict()      # ← FORÇA ESCALAR
-                    last_w_dict = last_w.to_dict()      # ← FORÇA ESCALAR
+                    last_d_dict = last_d.to_dict()
+                    last_w_dict = last_w.to_dict()
 
                     w_score, w_trend = get_weekly_score(df_weekly, last_w_dict)
 
-                    # SCORE DIÁRIO 100% SEGURO
+                    # Score diário
                     d_score = 0.0
                     close = last_d_dict.get('Close', np.nan)
                     rsi = last_d_dict.get('RSI', np.nan)
@@ -157,10 +162,8 @@ with tab1:
                             d_score += 1.5
                         elif macd_hist < 0 and macd < macd_signal:
                             d_score -= 1.5
-                    
                     if pd.notna(rsi) and 35 <= rsi <= 55:
                         d_score += 1.0
-                    
                     if pd.notna(ema9) and close > ema9:
                         d_score += 0.8
                     if pd.notna(ema20) and close > ema20:
@@ -187,7 +190,7 @@ with tab1:
                     st.success(sinal)
                     st.info(f"**Ação recomendada:** {action}")
 
-                    st.write("**Padrão de Candle (último dia):**")
+                    st.write("**Padrão de Candle:**")
                     for p in detectar_padroes_candle(df_daily):
                         st.write("•", p)
 
@@ -196,15 +199,13 @@ with tab1:
                     fig = go.Figure()
                     fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
                                                  low=df_plot['Low'], close=df_plot['Close']))
-                    if 'EMA9' in df_plot.columns:
-                        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA9'], name="EMA 9", line=dict(color="magenta", width=2)))
-                    if 'EMA20' in df_plot.columns:
-                        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA20'], name="EMA 20", line=dict(color="orange", width=2)))
+                    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot.get('EMA9'), name="EMA 9", line=dict(color="magenta", width=2)))
+                    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot.get('EMA20'), name="EMA 20", line=dict(color="orange", width=2)))
                     fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False,
                                       title=f"{ticker} - Últimos 180 dias")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    if pd.notna(atr):
+                    if pd.notna(atr) and pd.notna(close):
                         if "LONG" in action:
                             sl = close - 1.5 * atr
                             tp = close + 3.0 * atr
@@ -214,26 +215,23 @@ with tab1:
                         st.write(f"**Stop Loss:** ${sl:.2f} | **Take Profit:** ${tp:.2f} (RR ≈ 2:1)")
 
                 except Exception as e:
-                    st.error(f"Erro inesperado: {str(e)}")
-                    st.info("Atualiza a página ou tenta outro ticker.")
+                    st.error(f"Erro: {str(e)}")
+                    st.info("Atualiza a página (F5).")
 
-# ====================== SCANNER (igual com to_dict) ======================
 with tab2:
     st.subheader("🔍 Scanner Completo")
     market = st.selectbox("Escolha o índice", ["S&P 500 (503 ações)", "NASDAQ-100 (101 ações)"])
     
     if st.button("🚀 EXECUTAR SCANNER COMPLETO", type="primary"):
-        with st.spinner("Analisando todos os tickers..."):
+        with st.spinner("Analisando... (1-3 minutos)"):
             tickers = get_sp500_tickers() if "S&P" in market else get_nasdaq100_tickers()
             results = []
             progress = st.progress(0)
-            total = len(tickers)
-
             for i, t in enumerate(tickers):
                 try:
                     df_d, df_w = baixar_dados(t, weekly_max=False)
-                    if len(df_d) < 50:
-                        progress.progress((i+1)/total)
+                    if len(df_d) < 50: 
+                        progress.progress((i+1)/len(tickers))
                         continue
                     df_d = adicionar_indicadores(df_d)
                     df_w = adicionar_indicadores(df_w)
@@ -283,14 +281,12 @@ with tab2:
                     })
                 except:
                     pass
-                progress.progress((i+1)/total)
+                progress.progress((i+1)/len(tickers))
 
             if results:
                 df_res = pd.DataFrame(results).sort_values("Score", ascending=False)
                 st.success(f"✅ {len(results)} tickers analisados!")
                 st.dataframe(df_res, use_container_width=True, height=800)
                 st.download_button("📥 Baixar CSV", df_res.to_csv(index=False), f"scanner_{market.split()[0]}.csv")
-            else:
-                st.warning("Nenhum ticker retornou dados válidos.")
 
 st.caption("⚠️ Ferramenta técnica apenas • Nunca é recomendação de investimento")
