@@ -6,40 +6,28 @@ import plotly.graph_objects as go
 import pandas_ta as ta
 import warnings
 
-# Configurações de página e avisos
 warnings.filterwarnings("ignore")
 st.set_page_config(page_title="Pro Momentum Dashboard", layout="wide")
 
-# --- FUNÇÕES DE PROCESSAMENTO ---
-
 @st.cache_data(ttl=300)
 def baixar_dados(ticker):
-    # Pega 2 anos para garantir o cálculo da SMA200
     df = yf.download(ticker, period="2y", interval="1d", progress=False, auto_adjust=True)
-    
     if df.empty:
         return pd.DataFrame()
-
-    # CORREÇÃO DE ERRO: Achatar colunas multi-index (comum no yfinance novo)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    
-    # Remove colunas duplicadas e preenche vazios
     df = df.loc[:, ~df.columns.duplicated()]
     return df.dropna(how='all').ffill()
 
 def adicionar_indicadores(df):
-    if len(df) < 50: 
-        return df
-    
+    if len(df) < 50: return df
     df = df.copy()
     
-    # Médias Móveis
+    # Médias
     df['EMA9'] = ta.ema(df['Close'], length=9)
-    df['EMA21'] = ta.ema(df['Close'], length=21)
     df['SMA200'] = ta.sma(df['Close'], length=200)
     
-    # Indicadores de Momento e Força
+    # RSI
     df['RSI'] = ta.rsi(df['Close'], length=14)
     
     # Estocástico
@@ -56,90 +44,71 @@ def adicionar_indicadores(df):
     
     return df
 
-# --- INTERFACE SIDEBAR ---
+# --- INTERFACE ---
 st.sidebar.header("⚙️ Configurações")
-ticker_input = st.sidebar.text_input("Digite o Ticker (ex: NVDA, AAPL, PETR4.SA)", "NVDA").upper().strip()
+ticker_input = st.sidebar.text_input("Ticker", "NVDA").upper().strip()
 btn_analisar = st.sidebar.button("🚀 Analisar Agora", use_container_width=True)
 
-# --- CORPO DO DASHBOARD ---
-st.title(f"📊 Dashboard de Momentum: {ticker_input}")
+st.title(f"📊 Dashboard: {ticker_input}")
 
 if btn_analisar:
-    with st.spinner(f"Processando dados de {ticker_input}..."):
-        df_raw = baixar_dados(ticker_input)
+    with st.spinner("Processando..."):
+        df = baixar_dados(ticker_input)
         
-        if df_raw.empty:
-            st.error(f"❌ Não foi possível encontrar dados para o ticker: {ticker_input}")
+        if df.empty:
+            st.error("Ticker não encontrado.")
         else:
-            # Adiciona indicadores
-            df = adicionar_indicadores(df_raw)
-            
-            # Pega a última linha e converte explicitamente para valores escalares (float)
-            # Isso evita o erro de "TypeError" ao formatar as métricas
+            df = adicionar_indicadores(df)
             dados_atuais = df.iloc[-1]
             
             try:
+                # --- BUSCA DINÂMICA DE COLUNAS (O SEGREDO DA CORREÇÃO) ---
+                # Procura a coluna do SuperTrend Direction (começa com SUPERTd)
+                col_st_dir = [c for c in df.columns if c.startswith('SUPERTd')][0]
+                # Procura a coluna do valor do SuperTrend (começa com SUPERT_)
+                col_st_val = [c for c in df.columns if c.startswith('SUPERT_') and not c.startswith('SUPERTd')][0]
+                # Procura a coluna do ADX
+                col_adx = [c for c in df.columns if c.startswith('ADX')][0]
+                # Procura a coluna do Estocástico %K
+                col_stoch = [c for c in df.columns if c.startswith('STOCHk')][0]
+
+                # Conversão segura
                 preco_atual = float(dados_atuais['Close'])
                 rsi_val = float(dados_atuais['RSI'])
-                adx_val = float(dados_atuais['ADX_14'])
-                st_dir = int(dados_atuais['SUPERTd_10_3.0'])
-                stoch_k = float(dados_atuais['STOCHk_14_3_3'])
-                sma200 = float(dados_atuais['SMA200']) if not pd.isna(dados_atuais['SMA200']) else preco_atual
-                
-                # --- EXIBIÇÃO DE MÉTRICAS ---
+                adx_val = float(dados_atuais[col_adx])
+                st_dir = int(dados_atuais[col_st_dir])
+                stoch_k = float(dados_atuais[col_stoch])
+
+                # --- EXIBIÇÃO ---
                 m1, m2, m3, m4 = st.columns(4)
-                
-                m1.metric("Preço Atual", f"${preco_atual:.2f}")
-                
-                m2.metric("Força da Tendência (ADX)", f"{adx_val:.1f}", 
-                          "Forte" if adx_val > 25 else "Fraca",
-                          delta_color="normal")
-                
-                m3.metric("RSI (14)", f"{rsi_val:.1f}", 
-                          "Sobrecomprado" if rsi_val > 70 else "Sobrevendido" if rsi_val < 30 else "Neutro")
-                
+                m1.metric("Preço", f"${preco_atual:.2f}")
+                m2.metric("ADX (Força)", f"{adx_val:.1f}", "Tendência Forte" if adx_val > 25 else "Fraca")
+                m3.metric("RSI", f"{rsi_val:.1f}")
                 m4.metric("SuperTrend", "📈 ALTA" if st_dir == 1 else "📉 BAIXA")
 
-                # --- GRÁFICO INTERATIVO ---
-                fig = go.Figure()
-                
-                # Candlesticks (Últimos 120 dias para melhor visualização)
+                # Gráfico
                 df_plot = df.tail(120)
-                fig.add_trace(go.Candlestick(
-                    x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
-                    low=df_plot['Low'], close=df_plot['Close'], name="Preço"
-                ))
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
+                                             low=df_plot['Low'], close=df_plot['Close'], name="Preço"))
                 
-                # Médias e SuperTrend
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA9'], name="EMA 9", line=dict(color='cyan', width=1.5)))
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['SMA200'], name="SMA 200", line=dict(color='white', width=2, dash='dash')))
+                # Linha do SuperTrend no gráfico
+                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[col_st_val], name="SuperTrend", 
+                                         line=dict(color='yellow', width=1, dash='dot')))
                 
-                fig.update_layout(
-                    height=600, 
-                    template="plotly_dark", 
-                    xaxis_rangeslider_visible=False,
-                    margin=dict(l=10, r=10, t=30, b=10)
-                )
+                fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
 
-                # --- CHECKLIST DE ESTRATÉGIA ---
-                st.subheader("💡 Checklist de Swing Trade")
+                # Checklist
+                st.subheader("💡 Checklist")
                 c1, c2 = st.columns(2)
-                
                 with c1:
-                    st.info("**Análise de Tendência**")
-                    st.write(f"{'✅' if preco_atual > sma200 else '❌'} Preço acima da SMA 200")
-                    st.write(f"{'✅' if st_dir == 1 else '❌'} SuperTrend confirma viés de Alta")
-                    st.write(f"{'✅' if adx_val > 25 else '⚠️'} Tendência com força real (ADX > 25)")
-                
+                    st.write(f"{'✅' if st_dir == 1 else '❌'} SuperTrend")
+                    st.write(f"{'✅' if adx_val > 25 else '⚠️'} Força (ADX)")
                 with c2:
-                    st.info("**Timing de Entrada**")
-                    st.write(f"{'✅ OK' if rsi_val < 70 else '⚠️ Esticado'} RSI (Não está em sobrecompra)")
-                    st.write(f"{'✅ OK' if stoch_k < 80 else '⚠️ Esticado'} Estocástico (Espaço para subir)")
-                    st.write(f"{'✅' if preco_atual > float(dados_atuais['EMA9']) else '❌'} Preço acima da EMA 9 (Momento)")
+                    st.write(f"{'✅' if rsi_val < 70 else '⚠️'} Não está sobrecomprado")
+                    st.write(f"{'✅' if preco_atual > float(dados_atuais['EMA9']) else '❌'} Acima da EMA9")
 
             except Exception as e:
-                st.warning(f"Alguns indicadores ainda estão sendo calculados ou ticker tem dados insuficientes. Erro: {e}")
-
-st.markdown("---")
-st.caption("Aviso: Esta ferramenta é automática e baseada em dados históricos. Não constitui recomendação de investimento.")
+                st.error(f"Erro ao processar indicadores: {e}")
+                st.info("Dica: Tente um ticker com mais histórico (ex: AAPL) ou verifique se o pandas-ta está instalado.")
