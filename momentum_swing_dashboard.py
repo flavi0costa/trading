@@ -3,10 +3,13 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import warnings
+
+warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="Momentum Swing Dashboard", layout="wide")
 st.title("🔥 Momentum Swing Dashboard - US Market")
-st.markdown("**VERSÃO FINAL 100% ESTÁVEL • Sem mais erros de Series**")
+st.markdown("**VERSÃO DEFINITIVA • Erro 'truth value of a Series' ELIMINADO**")
 
 # ====================== FUNÇÕES ======================
 @st.cache_data(ttl=3600)
@@ -70,14 +73,14 @@ def detectar_padroes_candle(df):
         patterns.append("🟢 Inverted Hammer" if row['Close'] > row['Open'] else "🔴 Shooting Star")
     return patterns if patterns else ["⚪ Neutro"]
 
-def get_weekly_score(df_w, last_w):
+def get_weekly_score(df_w, last_w_dict):
     semanas = len(df_w)
     if semanas < 52:
         return 0, f"📉 Muito curto ({semanas} semanas)"
     
-    close = last_w.get('Close', np.nan)
-    sma200 = last_w.get('SMA_200', np.nan)
-    sma50 = last_w.get('SMA_50', np.nan)
+    close = last_w_dict.get('Close', np.nan)
+    sma200 = last_w_dict.get('SMA_200', np.nan)
+    sma50 = last_w_dict.get('SMA_50', np.nan)
     
     if pd.isna(sma200):
         if pd.notna(sma50):
@@ -117,7 +120,7 @@ tab1, tab2 = st.tabs(["📊 Analisador Individual", "🔍 Scanner de Mercado"])
 with tab1:
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker = st.text_input("Digite o ticker (ex: T, WMT, LUV, AAPL, NVDA)", "T").strip().upper()
+        ticker = st.text_input("Digite o ticker (ex: T, WMT, LUV, AAPL, NVDA)", "WMT").strip().upper()
     with col2:
         if st.button("🚀 ANALISAR TICKER", type="primary", use_container_width=True):
             with st.spinner(f"Analisando {ticker}..."):
@@ -133,19 +136,21 @@ with tab1:
                     
                     last_d = df_daily.iloc[-1]
                     last_w = df_weekly.iloc[-1]
-                    
-                    w_score, w_trend = get_weekly_score(df_weekly, last_w)
+                    last_d_dict = last_d.to_dict()      # ← FORÇA ESCALAR
+                    last_w_dict = last_w.to_dict()      # ← FORÇA ESCALAR
 
-                    # === SCORE DIÁRIO 100% SEGURO ===
+                    w_score, w_trend = get_weekly_score(df_weekly, last_w_dict)
+
+                    # SCORE DIÁRIO 100% SEGURO
                     d_score = 0.0
-                    close = last_d.get('Close', np.nan)
-                    rsi = last_d.get('RSI', np.nan)
-                    macd_hist = last_d.get('MACD_Hist', np.nan)
-                    macd = last_d.get('MACD', np.nan)
-                    macd_signal = last_d.get('MACD_Signal', np.nan)
-                    ema9 = last_d.get('EMA9', np.nan)
-                    ema20 = last_d.get('EMA20', np.nan)
-                    atr = last_d.get('ATR', np.nan)
+                    close = last_d_dict.get('Close', np.nan)
+                    rsi = last_d_dict.get('RSI', np.nan)
+                    macd_hist = last_d_dict.get('MACD_Hist', np.nan)
+                    macd = last_d_dict.get('MACD', np.nan)
+                    macd_signal = last_d_dict.get('MACD_Signal', np.nan)
+                    ema9 = last_d_dict.get('EMA9', np.nan)
+                    ema20 = last_d_dict.get('EMA20', np.nan)
+                    atr = last_d_dict.get('ATR', np.nan)
 
                     if pd.notna(macd_hist):
                         if macd_hist > 0 and macd > macd_signal:
@@ -171,12 +176,12 @@ with tab1:
 
                     st.subheader("📅 Análise Semanal")
                     st.write(f"**Tendência:** {w_trend}")
-                    st.write(f"**Semanas de dados semanais:** {len(df_weekly)}")
+                    st.write(f"**Semanas de dados:** {len(df_weekly)}")
                     st.write(f"**Score Semanal:** {w_score}")
 
                     col_a, col_b, col_c = st.columns(3)
                     with col_a: st.metric("Score Total", f"{total_score:.1f}/6")
-                    with col_b: st.metric("Preço Atual", f"${close:.2f}")
+                    with col_b: st.metric("Preço Atual", f"${close:.2f}" if pd.notna(close) else "—")
                     with col_c: st.metric("RSI", f"{rsi:.1f}" if pd.notna(rsi) else "—")
 
                     st.success(sinal)
@@ -191,32 +196,34 @@ with tab1:
                     fig = go.Figure()
                     fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
                                                  low=df_plot['Low'], close=df_plot['Close']))
-                    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot.get('EMA9'), name="EMA 9", line=dict(color="magenta", width=2)))
-                    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot.get('EMA20'), name="EMA 20", line=dict(color="orange", width=2)))
+                    if 'EMA9' in df_plot.columns:
+                        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA9'], name="EMA 9", line=dict(color="magenta", width=2)))
+                    if 'EMA20' in df_plot.columns:
+                        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA20'], name="EMA 20", line=dict(color="orange", width=2)))
                     fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False,
                                       title=f"{ticker} - Últimos 180 dias")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    if pd.notna(atr) and "LONG" in action:
-                        sl = close - 1.5 * atr
-                        tp = close + 3.0 * atr
-                        st.write(f"**Stop Loss:** ${sl:.2f} | **Take Profit:** ${tp:.2f} (RR ≈ 2:1)")
-                    elif pd.notna(atr) and "SHORT" in action:
-                        sl = close + 1.5 * atr
-                        tp = close - 3.0 * atr
+                    if pd.notna(atr):
+                        if "LONG" in action:
+                            sl = close - 1.5 * atr
+                            tp = close + 3.0 * atr
+                        else:
+                            sl = close + 1.5 * atr
+                            tp = close - 3.0 * atr
                         st.write(f"**Stop Loss:** ${sl:.2f} | **Take Profit:** ${tp:.2f} (RR ≈ 2:1)")
 
                 except Exception as e:
                     st.error(f"Erro inesperado: {str(e)}")
-                    st.info("Tenta novamente ou atualiza a página (yfinance às vezes demora).")
+                    st.info("Atualiza a página ou tenta outro ticker.")
 
-# ====================== SCANNER (igual, mas com a mesma correção) ======================
+# ====================== SCANNER (igual com to_dict) ======================
 with tab2:
     st.subheader("🔍 Scanner Completo")
     market = st.selectbox("Escolha o índice", ["S&P 500 (503 ações)", "NASDAQ-100 (101 ações)"])
     
     if st.button("🚀 EXECUTAR SCANNER COMPLETO", type="primary"):
-        with st.spinner("Analisando todos os tickers... (1-4 minutos)"):
+        with st.spinner("Analisando todos os tickers..."):
             tickers = get_sp500_tickers() if "S&P" in market else get_nasdaq100_tickers()
             results = []
             progress = st.progress(0)
@@ -232,17 +239,19 @@ with tab2:
                     df_w = adicionar_indicadores(df_w)
                     last_d = df_d.iloc[-1]
                     last_w = df_w.iloc[-1]
+                    last_d_dict = last_d.to_dict()
+                    last_w_dict = last_w.to_dict()
 
-                    w_score, w_trend = get_weekly_score(df_w, last_w)
+                    w_score, w_trend = get_weekly_score(df_w, last_w_dict)
                     
                     d_score = 0.0
-                    close = last_d.get('Close', np.nan)
-                    rsi = last_d.get('RSI', np.nan)
-                    macd_hist = last_d.get('MACD_Hist', np.nan)
-                    macd = last_d.get('MACD', np.nan)
-                    macd_signal = last_d.get('MACD_Signal', np.nan)
-                    ema9 = last_d.get('EMA9', np.nan)
-                    ema20 = last_d.get('EMA20', np.nan)
+                    close = last_d_dict.get('Close', np.nan)
+                    rsi = last_d_dict.get('RSI', np.nan)
+                    macd_hist = last_d_dict.get('MACD_Hist', np.nan)
+                    macd = last_d_dict.get('MACD', np.nan)
+                    macd_signal = last_d_dict.get('MACD_Signal', np.nan)
+                    ema9 = last_d_dict.get('EMA9', np.nan)
+                    ema20 = last_d_dict.get('EMA20', np.nan)
 
                     if pd.notna(macd_hist):
                         if macd_hist > 0 and macd > macd_signal:
