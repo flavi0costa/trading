@@ -1,92 +1,141 @@
 import streamlit as st
+from datetime import datetime
 
-st.set_page_config(page_title="Momentum & DCA Calc", layout="wide")
+# Configuração da Página
+st.set_page_config(page_title="Momentum & DCA Precision", layout="wide")
 
-st.title("🧮 Calculadora de Trading: Momentum & DCA")
+st.title("🧮 Calculadora de Trading (Fracionária + DCA)")
+st.caption("Configurada para Banca de 500€ e Estratégia de Momentum")
 
 # ==========================================
-# 1. CALCULADORA DE RISCO (NOVA POSIÇÃO)
+# CONFIGURAÇÕES DE BANCA (SIDEBAR)
 # ==========================================
-st.subheader("🚀 Nova Posição (Estratégia Momentum)")
-with st.container():
-    c1, c2, c3, c4, c5 = st.columns(5)
+with st.sidebar:
+    st.header("⚙️ Gestão de Banca")
+    capital_total = st.number_input("Banca Total (€)", value=500.0)
+    risco_perc = st.slider("Risco por Trade (%)", 0.1, 5.0, 1.0)
+    valor_risco_fin = capital_total * (risco_perc / 100)
     
-    with c1:
-        ticker = st.text_input("Ticker", "NVDA").upper()
-    with c2:
-        capital = st.number_input("Capital Total ($)", value=10000.0)
-    with c3:
-        risco_p = st.number_input("Risco (%)", value=1.0)
-    with c4:
-        ent_preco = st.number_input("Preço Entrada", value=150.0)
-    with c5:
-        atr = st.number_input("Valor ATR", value=2.5, format="%.4f")
+    st.divider()
+    st.metric("Risco Máximo Permitido", f"{valor_risco_fin:.2f}€")
+    st.info("O teu objetivo é nunca perder mais do que o valor acima por trade.")
 
-# Cálculos Momentum
-dist_sl = 1.5 * atr
-sl_m = ent_preco - dist_sl
-tp1_m = ent_preco + dist_sl
-tp2_m = ent_preco + (3.0 * atr)
-v_risco = capital * (risco_p / 100)
-qtd = int(v_risco / dist_sl) if dist_sl > 0 else 0
+# Criação de colunas para os dois módulos principais
+col_esq, col_dir = st.columns(2)
 
-# Exibição Rápida Momentum
-col_m1, col_m2, col_m3 = st.columns(3)
-col_m1.error(f"Stop Loss: **${sl_m:.2f}**")
-col_m2.success(f"TP1 (50%): **${tp1_m:.2f}** | TP2: **${tp2_m:.2f}**")
-col_m3.info(f"Quantidade: **{qtd} un**")
-
-st.divider()
+# Variáveis globais para o resumo final (inicialização)
+novo_pm = 0.0
+total_q = 0.0
 
 # ==========================================
-# 2. CÁLCULO DE DCA (MÉDIA DE CUSTO)
+# 1. MÓDULO: NOVA POSIÇÃO (MOMENTUM)
 # ==========================================
-st.subheader("📉 Calculadora de DCA (Dollar Cost Averaging)")
-st.caption("Usa isto para calcular o novo preço médio ao adicionar mais ações a uma posição existente.")
-
-with st.container():
-    dca1, dca2 = st.columns(2)
-    
-    with dca1:
-        st.markdown("**Posição Atual**")
-        atual_qtd = st.number_input("Qtd. que já possuis", value=10, min_value=0)
-        atual_preco = st.number_input("Preço Médio Atual", value=160.0)
+with col_esq:
+    st.subheader("🚀 Nova Posição")
+    with st.container(border=True):
+        ticker = st.text_input("Ticker (Ex: NVDA)", "NVDA").upper()
+        preco_ent = st.number_input("Preço de Entrada ($/€)", value=100.0, format="%.2f")
+        atr_val = st.number_input("Valor ATR (do Dashboard)", value=2.0, format="%.4f")
         
-    with dca2:
-        st.markdown("**Nova Compra**")
-        nova_qtd = st.number_input("Qtd. a comprar agora", value=5, min_value=0)
-        novo_preco = st.number_input("Preço da nova compra", value=145.0)
-
-# Lógica DCA
-total_acoes = atual_qtd + nova_qtd
-if total_acoes > 0:
-    novo_preco_medio = ((atual_qtd * atual_preco) + (nova_qtd * novo_preco)) / total_acoes
-    investimento_total = total_acoes * novo_preco_medio
-    reducao_perc = ((atual_preco - novo_preco_medio) / atual_preco) * 100 if atual_preco > 0 else 0
-else:
-    total_acoes = 0
-    novo_preco_medio = 0
-    investimento_total = 0
-    reducao_perc = 0
-
-# Exibição Resultados DCA
-st.markdown("### 📊 Resultado do DCA")
-res_dca1, res_dca2, res_dca3 = st.columns(3)
-
-with res_dca1:
-    st.metric("Novo Preço Médio", f"${novo_preco_medio:.2f}", 
-              delta=f"-{reducao_perc:.2f}%" if reducao_perc > 0 else None, delta_color="normal")
-
-with res_dca2:
-    st.metric("Total de Ações", f"{total_acoes} un")
-
-with res_dca3:
-    st.metric("Investimento Total", f"${investimento_total:.2f}")
+        # Lógica Momentum (1.5x ATR para Stop, 3.0x ATR para TP2)
+        dist_sl = 1.5 * atr_val
+        sl = preco_ent - dist_sl
+        tp1 = preco_ent + dist_sl
+        tp2 = preco_ent + (3.0 * atr_val)
+        
+        # Cálculo de Quantidade Fracionária (3 casas decimais)
+        if dist_sl > 0:
+            qtd_f = valor_risco_fin / dist_sl
+        else:
+            qtd_f = 0.0
+            
+        invest_t = qtd_f * preco_ent
+        
+        st.divider()
+        st.error(f"**STOP LOSS: {sl:.2f}**")
+        st.success(f"**TP1 (50%): {tp1:.2f} | TP2 (Final): {tp2:.2f}**")
+        
+        c_res1, c_res2 = st.columns(2)
+        c_res1.metric("Qtd. a Comprar", f"{qtd_f:.3f}")
+        
+        if invest_t > capital_total:
+            c_res2.warning(f"Custo: {invest_t:.2f}€")
+            st.error("⚠️ Atenção: Posição excede o teu capital total!")
+        else:
+            c_res2.metric("Investimento Total", f"{invest_t:.2f}€")
 
 # ==========================================
-# 3. RESUMO PARA NOTAS
+# 2. MÓDULO: CÁLCULO DE DCA
+# ==========================================
+with col_dir:
+    st.subheader("📉 Ajuste de Preço Médio (DCA)")
+    with st.container(border=True):
+        st.markdown("**Posição Atual**")
+        c_at1, c_at2 = st.columns(2)
+        q_atual = c_at1.number_input("Qtd. que já tens", value=0.000, format="%.3f", step=0.001)
+        p_atual = c_at2.number_input("Preço Médio Atual", value=0.0, format="%.2f")
+        
+        st.markdown("**Nova Compra (Reforço)**")
+        c_nv1, c_nv2 = st.columns(2)
+        q_nova = c_nv1.number_input("Qtd. a adicionar", value=0.000, format="%.3f", step=0.001)
+        p_novo = c_nv2.number_input("Preço da nova compra", value=0.0, format="%.2f")
+        
+        # Lógica DCA
+        total_q = q_atual + q_nova
+        if total_q > 0:
+            novo_pm = ((q_atual * p_atual) + (q_nova * p_novo)) / total_q
+            total_inv = total_q * novo_pm
+            reducao = ((p_atual - novo_pm) / p_atual * 100) if p_atual > 0 else 0
+            
+            st.divider()
+            st.metric("Novo Preço Médio", f"{novo_pm:.2f}", 
+                      delta=f"-{reducao:.2f}%" if reducao > 0 else None)
+            
+            c_dca1, c_dca2 = st.columns(2)
+            c_dca1.write(f"Total Ações: **{total_q:.3f}**")
+            c_dca2.write(f"Custo Total: **{total_inv:.2f}€**")
+            
+            if total_inv > capital_total:
+                st.error("⚠️ Posição total excede a banca!")
+        else:
+            st.info("Insere dados para calcular o novo preço médio.")
+
+# ==========================================
+# 3. RESUMO PARA REGISTO (JOURNAL READY)
 # ==========================================
 st.divider()
-st.subheader("📝 Resumo para Registo")
-resumo_final = f"{ticker} | Novo Preço Médio: {novo_preco_medio:.2f} | Total Ações: {total_acoes}"
-st.code(resumo_final, language="text")
+st.subheader("📝 Resumo para Diário de Trader")
+
+# Data para o registo
+data_trade = st.date_input("Data da Operação", value=datetime.now())
+
+# Construção do texto otimizado para o Journal
+resumo_journal = f"""=== REGISTO DE TRADE: {ticker} ===
+Data: {data_trade.strftime('%d/%m/%Y')}
+-----------------------------------------
+DADOS TÉCNICOS:
+Entrada Original: ${preco_ent:.2f}
+Stop Loss (1.5x ATR): ${sl:.2f}
+Alvo 1 (Rácio 1:1): ${tp1:.2f}
+Alvo 2 (Rácio 2:1): ${tp2:.2f}
+Qtd Sugerida: {qtd_f:.3f} un | Risco Financeiro: {valor_risco_fin:.2f}€
+
+STATUS DCA (Se aplicável):
+Novo Preço Médio: {novo_pm:.2f if total_q > 0 else 'N/A'}
+Total Ações Acumuladas: {total_q:.3f if total_q > 0 else 'N/A'}
+
+CHECKLIST PRÉ-TRADE:
+[ ] Tendência: Preço acima da SMA 200 e EMA 21 > EMA 50?
+[ ] Setup: RSI 2 abaixo de 15?
+[ ] Volatilidade: ATR atualizado no cálculo?
+[ ] Risco: A perda máxima é de apenas {valor_risco_fin:.2f}€?
+
+NOTAS DE EXECUÇÃO:
+- Sentimento: 
+- Erros cometidos:
+- Por que saí do trade:
+-----------------------------------------
+"""
+
+st.code(resumo_journal, language="text")
+st.caption("Clica no ícone de cópia (canto superior direito da caixa) e cola no teu Journal (Telegram/Notion).")
