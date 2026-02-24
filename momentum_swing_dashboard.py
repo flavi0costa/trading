@@ -5,11 +5,11 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime
 
-st.set_page_config(page_title="Swing Trade Analyzer", layout="wide")
-st.title("🔥 Analisador Swing Trade Profissional")
-st.markdown("**Ticker + Multi-timeframe + Padrões de Candles + EMA9**")
+st.set_page_config(page_title="Momentum Swing Dashboard", layout="wide")
+st.title("🔥 Momentum Swing Dashboard - US Market")
+st.markdown("**Análise individual + Scanner S&P500 / NASDAQ-100**")
 
-# ====================== FUNÇÕES ======================
+# ====================== FUNÇÕES AUXILIARES ======================
 @st.cache_data(ttl=300)
 def baixar_dados(ticker):
     df_d = yf.download(ticker, period="1y", interval="1d", progress=False)
@@ -18,241 +18,282 @@ def baixar_dados(ticker):
 
 def adicionar_indicadores(df):
     df = df.copy()
-    df['EMA9']  = df['Close'].ewm(span=9,  adjust=False).mean()
+    if len(df) < 10:
+        return df
+    df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
     df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
     df['SMA50'] = df['Close'].rolling(50).mean()
-    df['SMA200']= df['Close'].rolling(200).mean()
+    df['SMA200'] = df['Close'].rolling(200).mean()
     
-    # MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    # RSI
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # Bollinger
     df['BB_Mid'] = df['Close'].rolling(20).mean()
     df['BB_Std'] = df['Close'].rolling(20).std()
     df['BB_Upper'] = df['BB_Mid'] + 2 * df['BB_Std']
     df['BB_Lower'] = df['BB_Mid'] - 2 * df['BB_Std']
     
-    # ATR
-    tr = pd.concat([
-        df['High'] - df['Low'],
-        (df['High'] - df['Close'].shift()).abs(),
-        (df['Low']  - df['Close'].shift()).abs()
-    ], axis=1).max(axis=1)
+    tr = pd.concat([df['High']-df['Low'], 
+                    (df['High']-df['Close'].shift()).abs(), 
+                    (df['Low']-df['Close'].shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(14).mean()
-    
     df['Vol_Avg'] = df['Volume'].rolling(20).mean()
     return df
 
 def detectar_padroes_candle(df):
     if len(df) < 3:
-        return ["Dados insuficientes"]
-    
+        return ["⚪ Dados insuficientes"]
     row = df.iloc[-1]
     prev = df.iloc[-2]
-    prev2 = df.iloc[-3]
-    
     body = abs(row['Close'] - row['Open'])
     range_c = row['High'] - row['Low']
     if range_c == 0:
-        return ["Candle indefinido"]
-    
+        return ["⚪ Candle indefinido"]
     upper_wick = (row['High'] - max(row['Open'], row['Close'])) / range_c
     lower_wick = (min(row['Open'], row['Close']) - row['Low']) / range_c
     body_ratio = body / range_c
     
     patterns = []
-    
-    # Doji
     if body_ratio < 0.1:
-        patterns.append("🔴 Doji – Indecisão forte")
-    
-    # Marubozu
+        patterns.append("🔴 Doji – Indecisão")
     if body_ratio > 0.85:
-        if row['Close'] > row['Open']:
-            patterns.append("🟢 Marubozu Bullish – Forte alta")
-        else:
-            patterns.append("🔴 Marubozu Bearish – Forte baixa")
-    
-    # Hammer / Hanging Man
+        patterns.append("🟢 Marubozu Bullish" if row['Close'] > row['Open'] else "🔴 Marubozu Bearish")
     if lower_wick > 0.6 and upper_wick < 0.15 and body_ratio < 0.35:
-        if row['Close'] > row['Open']:
-            patterns.append("🟢 Hammer Bullish – Reversão de baixa")
-        else:
-            patterns.append("🔴 Hanging Man – Cuidado (reversão de alta)")
-    
-    # Shooting Star / Inverted Hammer
+        patterns.append("🟢 Hammer Bullish" if row['Close'] > row['Open'] else "🔴 Hanging Man")
     if upper_wick > 0.6 and lower_wick < 0.15 and body_ratio < 0.35:
-        if row['Close'] > row['Open']:
-            patterns.append("🟢 Inverted Hammer – Reversão de baixa")
-        else:
-            patterns.append("🔴 Shooting Star – Reversão de alta")
-    
-    # Engulfing
+        patterns.append("🟢 Inverted Hammer" if row['Close'] > row['Open'] else "🔴 Shooting Star")
+    # Engulfing simplificado
     prev_body = abs(prev['Close'] - prev['Open'])
-    if (row['Close'] > row['Open'] and prev['Close'] < prev['Open'] and
-        row['Open'] < prev['Close'] and row['Close'] > prev['Open'] and body > prev_body):
-        patterns.append("🟢 Bullish Engulfing – Forte sinal de alta")
-    elif (row['Close'] < row['Open'] and prev['Close'] > prev['Open'] and
-          row['Open'] > prev['Close'] and row['Close'] < prev['Open'] and body > prev_body):
-        patterns.append("🔴 Bearish Engulfing – Forte sinal de baixa")
-    
-    if not patterns:
-        patterns.append("⚪ Padrão neutro / sem sinal claro")
-    
-    return patterns
+    if body > prev_body * 1.1:
+        if row['Close'] > row['Open'] and prev['Close'] < prev['Open'] and row['Open'] < prev['Close']:
+            patterns.append("🟢 Bullish Engulfing")
+        elif row['Close'] < row['Open'] and prev['Close'] > prev['Open'] and row['Open'] > prev['Close']:
+            patterns.append("🔴 Bearish Engulfing")
+    return patterns if patterns else ["⚪ Neutro"]
+
+def get_weekly_score(last_w, df_w):
+    if len(df_w) < 200 or pd.isna(last_w.get('SMA_200')) or pd.isna(last_w.get('Close')):
+        return 0, "📉 Histórico curto"
+    close = last_w['Close']
+    sma200 = last_w['SMA_200']
+    sma50 = last_w.get('SMA_50')
+    if close > sma200:
+        if pd.notna(sma50) and sma50 > sma200:
+            return 2, "🟢 Forte Alta"
+        return 1, "🟢 Alta"
+    else:
+        if pd.notna(sma50) and sma50 < sma200:
+            return -2, "🔴 Forte Baixa"
+        return -1, "🔴 Baixa"
+
+def get_sp500_tickers():
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        for table in tables:
+            if 'Symbol' in table.columns:
+                return [t.replace('.', '-') for t in table['Symbol'].tolist() if t]
+    except:
+        pass
+    return ["AAPL", "MSFT", "GOOGL"]  # fallback
+
+def get_nasdaq100_tickers():
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/NASDAQ-100")
+        for table in tables:
+            if 'Ticker' in table.columns:
+                return [t.replace('.', '-') for t in table['Ticker'].tolist() if t]
+    except:
+        pass
+    return ["AAPL", "MSFT", "NVDA"]
 
 # ====================== INTERFACE ======================
-col1, col2 = st.columns([3, 1])
-with col1:
-    ticker = st.text_input("Digite o ticker (ex: PETR4.SA, AAPL, VALE3.SA)", "PETR4.SA").strip().upper()
-with col2:
-    analisar = st.button("🚀 ANALISAR", type="primary", use_container_width=True)
+tab1, tab2 = st.tabs(["📊 Analisador Individual", "🔍 Scanner de Mercado"])
 
-if analisar:
-    with st.spinner(f"Baixando dados e analisando {ticker}..."):
-        df_daily, df_weekly = baixar_dados(ticker)
-        
-        if df_daily.empty:
-            st.error("❌ Ticker inválido ou sem dados.")
-            st.stop()
-        
-        df_daily = adicionar_indicadores(df_daily)
-        df_weekly = adicionar_indicadores(df_weekly)
-        
-        last_d = df_daily.iloc[-1]
-        last_w = df_weekly.iloc[-1]
-        
-        # ====================== ANÁLISE SEMANAL ======================
-        st.subheader("📅 Análise Semanal (Tendência Primária)")
-        if last_w['Close'] > last_w['SMA_200']:
-            w_trend = "🟢 Forte Alta" if last_w['SMA_50'] > last_w['SMA_200'] else "🟢 Alta"
-            w_score = 2 if last_w['SMA_50'] > last_w['SMA_200'] else 1
-        else:
-            w_trend = "🔴 Forte Baixa" if last_w['SMA_50'] < last_w['SMA_200'] else "🔴 Baixa"
-            w_score = -2 if last_w['SMA_50'] < last_w['SMA_200'] else -1
-        
-        st.write(f"**Tendência Semanal:** {w_trend}")
-        st.write(f"RSI Semanal: **{last_w['RSI']:.1f}**")
-        st.write(f"Preço: **{last_w['Close']:.2f}** | SMA50: {last_w['SMA_50']:.2f} | SMA200: {last_w['SMA_200']:.2f}")
-        
-        # ====================== ANÁLISE DIÁRIA ======================
-        st.subheader("📊 Análise Diária + EMA9 + Padrões de Candles")
-        
-        # Score
-        score = w_score
-        if last_d['MACD_Hist'] > 0 and last_d['MACD'] > last_d['MACD_Signal']:
-            score += 1.5
-        elif last_d['MACD_Hist'] < 0 and last_d['MACD'] < last_d['MACD_Signal']:
-            score -= 1.5
-        if 35 <= last_d['RSI'] <= 55:
-            score += 1
-        if last_d['Close'] > last_d['EMA9']:
-            score += 0.8
-        else:
-            score -= 0.8
-        if last_d['Close'] > last_d['EMA20']:
-            score += 0.5
-        
-        if score >= 3.5:
-            sinal = "🟢 **FORTE COMPRA** – Alinhamento excelente"
-            action = "ENTRADA LONG"
-        elif score >= 1.5:
-            sinal = "🟡 COMPRA moderada"
-            action = "ENTRADA LONG"
-        elif score <= -3.5:
-            sinal = "🔴 **FORTE VENDA**"
-            action = "ENTRADA SHORT"
-        elif score <= -1.5:
-            sinal = "🟠 VENDA moderada"
-            action = "ENTRADA SHORT"
-        else:
-            sinal = "⚪ NEUTRO – Aguarde"
-            action = "Sem entrada"
-        
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.metric("Score Total", f"{score:.1f}/6", delta=None)
-        with col_b:
-            st.metric("Preço Atual", f"R$ {last_d['Close']:.2f}")
-        with col_c:
-            st.metric("RSI Diário", f"{last_d['RSI']:.1f}")
-        
-        st.success(sinal)
-        st.info(f"**Ação recomendada:** {action}")
-        
-        # Padrões de candles
-        padroes = detectar_padroes_candle(df_daily)
-        st.write("**Leitura de Candles (último candle):**")
-        for p in padroes:
-            st.write(f"• {p}")
-        
-        # ====================== GRÁFICO ======================
-        st.subheader("📈 Gráfico Diário Interativo")
-        
-        df_plot = df_daily.tail(180).copy()  # últimos 6 meses
-        
-        fig = go.Figure()
-        
-        # Candlestick
-        fig.add_trace(go.Candlestick(
-            x=df_plot.index,
-            open=df_plot['Open'],
-            high=df_plot['High'],
-            low=df_plot['Low'],
-            close=df_plot['Close'],
-            name="Candles"
-        ))
-        
-        # EMAs
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA9'],  name="EMA 9",  line=dict(color="magenta", width=2)))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA20'], name="EMA 20", line=dict(color="orange", width=2)))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA50'], name="EMA 50", line=dict(color="blue", width=2)))
-        
-        # Bollinger
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Upper'], name="BB Upper", line=dict(color="gray", dash="dash")))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Lower'], name="BB Lower", line=dict(color="gray", dash="dash")))
-        
-        fig.update_layout(
-            height=650,
-            xaxis_rangeslider_visible=False,
-            template="plotly_dark",
-            title=f"{ticker} - Últimos 180 dias"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # ====================== GESTÃO DE RISCO ======================
-        atr = last_d['ATR']
-        current = last_d['Close']
-        
-        if "LONG" in action:
-            sl = current - 1.5 * atr
-            tp = current + 3.0 * atr
-        elif "SHORT" in action:
-            sl = current + 1.5 * atr
-            tp = current - 3.0 * atr
-        else:
-            sl = tp = None
-        
-        st.subheader("🎯 Gestão de Risco Sugerida")
-        if sl and tp:
-            st.write(f"**Entrada:** Atual ou pullback na EMA9")
-            st.write(f"**Stop Loss:** {sl:.2f}  ({((current-sl)/current*100 if 'LONG' in action else (sl-current)/current*100):.1f}% risco)")
-            st.write(f"**Take Profit:** {tp:.2f}  (RR ≈ 2:1)")
-        
-        st.caption("⚠️ Isso é apenas uma ferramenta técnica. Nunca é recomendação de investimento. Gerencie seu risco.")
+# ====================== ABA 1 - INDIVIDUAL ======================
+with tab1:
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        ticker = st.text_input("Digite o ticker (ex: AAPL, TSLA, NVDA)", "AAPL").strip().upper()
+    with col2:
+        analisar = st.button("🚀 ANALISAR TICKER", type="primary", use_container_width=True)
 
-# Rodapé
-st.markdown("---")
-st.markdown("Feito com ❤️ para swing traders • Atualiza a cada 5 minutos")
+    if analisar:
+        with st.spinner(f"Analisando {ticker}..."):
+            df_daily, df_weekly = baixar_dados(ticker)
+            if df_daily.empty or len(df_daily) < 50:
+                st.error("❌ Ticker inválido ou sem dados suficientes.")
+                st.stop()
+            
+            df_daily = adicionar_indicadores(df_daily)
+            df_weekly = adicionar_indicadores(df_weekly)
+            last_d = df_daily.iloc[-1]
+            last_w = df_weekly.iloc[-1]
+            
+            # Score semanal seguro
+            w_score, w_trend = get_weekly_score(last_w, df_weekly)
+            
+            # Score diário
+            d_score = 0
+            if pd.notna(last_d.get('MACD_Hist')):
+                if last_d['MACD_Hist'] > 0 and last_d['MACD'] > last_d.get('MACD_Signal'):
+                    d_score += 1.5
+                elif last_d['MACD_Hist'] < 0 and last_d['MACD'] < last_d.get('MACD_Signal'):
+                    d_score -= 1.5
+            if pd.notna(last_d.get('RSI')) and 35 <= last_d['RSI'] <= 55:
+                d_score += 1.0
+            if pd.notna(last_d.get('EMA9')) and last_d['Close'] > last_d['EMA9']:
+                d_score += 0.8
+            if pd.notna(last_d.get('EMA20')) and last_d['Close'] > last_d['EMA20']:
+                d_score += 0.5
+            
+            total_score = w_score + d_score
+            
+            # Sinal
+            if total_score >= 3.5:
+                sinal = "🟢 **FORTE COMPRA**"
+                action = "ENTRADA LONG"
+            elif total_score >= 1.5:
+                sinal = "🟡 COMPRA moderada"
+                action = "ENTRADA LONG"
+            elif total_score <= -3.5:
+                sinal = "🔴 **FORTE VENDA**"
+                action = "ENTRADA SHORT"
+            elif total_score <= -1.5:
+                sinal = "🟠 VENDA moderada"
+                action = "ENTRADA SHORT"
+            else:
+                sinal = "⚪ NEUTRO"
+                action = "Sem entrada"
+            
+            st.subheader("📅 Análise Semanal (Tendência Primária)")
+            st.write(f"**Tendência:** {w_trend}")
+            st.write(f"**Score Semanal:** {w_score}")
+            
+            st.subheader("📊 Análise Diária + EMA9 + Candles")
+            col_a, col_b, col_c = st.columns(3)
+            with col_a: st.metric("Score Total", f"{total_score:.1f}/6")
+            with col_b: st.metric("Preço Atual", f"${last_d['Close']:.2f}")
+            with col_c: st.metric("RSI", f"{last_d.get('RSI', 50):.1f}")
+            
+            st.success(sinal)
+            st.info(f"**Ação:** {action}")
+            
+            st.write("**Padrão de Candle (último dia):**")
+            for p in detectar_padroes_candle(df_daily):
+                st.write(f"• {p}")
+            
+            # Gráfico
+            st.subheader("📈 Gráfico Diário (180 dias)")
+            df_plot = df_daily.tail(180)
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
+                                         low=df_plot['Low'], close=df_plot['Close'], name="OHLC"))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA9'], name="EMA 9", line=dict(color="magenta", width=2)))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA20'], name="EMA 20", line=dict(color="orange", width=2)))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA50'], name="EMA 50", line=dict(color="blue", width=2)))
+            fig.update_layout(height=650, xaxis_rangeslider_visible=False, template="plotly_dark",
+                              title=f"{ticker} - Últimos 180 dias")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Risco
+            atr = last_d.get('ATR', 0)
+            current = last_d['Close']
+            if "LONG" in action:
+                sl = current - 1.5 * atr
+                tp = current + 3.0 * atr
+            elif "SHORT" in action:
+                sl = current + 1.5 * atr
+                tp = current - 3.0 * atr
+            else:
+                sl = tp = None
+            if sl and tp:
+                st.subheader("🎯 Gestão de Risco")
+                st.write(f"**Stop Loss:** ${sl:.2f}")
+                st.write(f"**Take Profit:** ${tp:.2f} (RR ≈ 2:1)")
+
+# ====================== ABA 2 - SCANNER ======================
+with tab2:
+    st.subheader("🔍 Scanner Completo do Mercado Americano")
+    market = st.selectbox("Escolha o índice", 
+                          ["S&P 500 (503 ações)", "NASDAQ-100 (101 ações)"])
+    
+    if st.button("🚀 EXECUTAR SCANNER COMPLETO", type="primary"):
+        with st.spinner("Baixando dados de todos os tickers... (pode levar 1-4 minutos na primeira vez)"):
+            tickers = get_sp500_tickers() if "S&P" in market else get_nasdaq100_tickers()
+            
+            results = []
+            progress_bar = st.progress(0)
+            total = len(tickers)
+            
+            for i, t in enumerate(tickers):
+                try:
+                    df_d, df_w = baixar_dados(t)
+                    if len(df_d) < 100 or len(df_w) < 50:
+                        progress_bar.progress((i+1)/total)
+                        continue
+                    
+                    df_d = adicionar_indicadores(df_d)
+                    df_w = adicionar_indicadores(df_w)
+                    last_d = df_d.iloc[-1]
+                    last_w = df_w.iloc[-1]
+                    
+                    w_score, w_trend = get_weekly_score(last_w, df_w)
+                    
+                    d_score = 0
+                    if pd.notna(last_d.get('MACD_Hist')):
+                        if last_d['MACD_Hist'] > 0 and last_d['MACD'] > last_d.get('MACD_Signal', 0):
+                            d_score += 1.5
+                        elif last_d['MACD_Hist'] < 0 and last_d['MACD'] < last_d.get('MACD_Signal', 0):
+                            d_score -= 1.5
+                    if pd.notna(last_d.get('RSI')) and 35 <= last_d['RSI'] <= 55:
+                        d_score += 1
+                    if pd.notna(last_d.get('EMA9')) and last_d['Close'] > last_d['EMA9']:
+                        d_score += 0.8
+                    if pd.notna(last_d.get('EMA20')) and last_d['Close'] > last_d['EMA20']:
+                        d_score += 0.5
+                    
+                    total_score = w_score + d_score
+                    
+                    if total_score >= 3.5: sinal = "🟢 FORTE LONG"
+                    elif total_score >= 1.5: sinal = "🟡 LONG"
+                    elif total_score <= -3.5: sinal = "🔴 FORTE SHORT"
+                    elif total_score <= -1.5: sinal = "🟠 SHORT"
+                    else: sinal = "⚪ NEUTRO"
+                    
+                    candle = detectar_padroes_candle(df_d)[0]
+                    
+                    results.append({
+                        "Ticker": t,
+                        "Score": round(total_score, 1),
+                        "Sinal": sinal,
+                        "Preço": round(last_d['Close'], 2),
+                        "RSI": round(last_d.get('RSI', 50), 1),
+                        "Tendência Semanal": w_trend,
+                        "Candle": candle[:35]
+                    })
+                except:
+                    pass  # pula tickers com problema
+                
+                progress_bar.progress((i+1)/total)
+            
+            if results:
+                df_res = pd.DataFrame(results).sort_values("Score", ascending=False)
+                st.success(f"✅ Scan concluído! {len(results)} tickers analisados.")
+                st.dataframe(df_res, use_container_width=True, height=800)
+                
+                csv = df_res.to_csv(index=False)
+                st.download_button("📥 Baixar CSV completo", csv, f"swing_scan_{market.split()[0]}.csv")
+            else:
+                st.warning("Nenhum ticker retornou dados válidos.")
+
+st.caption("⚠️ Ferramenta técnica apenas. Nunca é recomendação de investimento. Gerencie seu risco.")
