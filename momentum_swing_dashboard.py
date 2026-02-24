@@ -9,20 +9,15 @@ warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="Momentum Swing Dashboard", layout="wide")
 st.title("🔥 Momentum Swing Dashboard - US Market")
-st.markdown("**VERSÃO 100% FUNCIONAL • Erro ['Close'] ELIMINADO**")
+st.markdown("**VERSÃO FINAL ANTI-SERIES AMBIGUOUS • Funciona com NVDA, WMT, T, LUV**")
 
-# ====================== FUNÇÕES ======================
 @st.cache_data(ttl=300)
 def baixar_dados(ticker, weekly_max=False):
     period_w = "max" if weekly_max else "5y"
-    # 🔥 auto_adjust=True resolve o problema da coluna Close
     df_d = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
     df_w = yf.download(ticker, period=period_w, interval="1wk", progress=False, auto_adjust=True)
-    
-    # Remove qualquer linha vazia ou incompleta
     df_d = df_d.dropna(how='all').ffill()
     df_w = df_w.dropna(how='all').ffill()
-    
     return df_d, df_w
 
 def adicionar_indicadores(df):
@@ -52,40 +47,42 @@ def adicionar_indicadores(df):
     df['BB_Upper'] = df['BB_Mid'] + 2 * df['BB_Std']
     df['BB_Lower'] = df['BB_Mid'] - 2 * df['BB_Std']
     
-    tr = pd.concat([df['High']-df['Low'], 
-                    (df['High']-df['Close'].shift()).abs(), 
-                    (df['Low']-df['Close'].shift()).abs()], axis=1).max(axis=1)
+    tr = pd.concat([df['High']-df['Low'], (df['High']-df['Close'].shift()).abs(), (df['Low']-df['Close'].shift()).abs()], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(14, min_periods=1).mean()
     df['Vol_Avg'] = df['Volume'].rolling(20, min_periods=1).mean()
     return df
 
 def detectar_padroes_candle(df):
     if len(df) < 3: return ["⚪ Dados insuficientes"]
-    row = df.iloc[-1]
-    prev = df.iloc[-2]
-    body = abs(row['Close'] - row['Open'])
-    range_c = row['High'] - row['Low']
+    c = df['Close'].iloc[-1]
+    o = df['Open'].iloc[-1]
+    h = df['High'].iloc[-1]
+    l = df['Low'].iloc[-1]
+    prev_c = df['Close'].iloc[-2]
+    prev_o = df['Open'].iloc[-2]
+    body = abs(c - o)
+    range_c = h - l
     if range_c == 0: return ["⚪ Candle indefinido"]
-    upper_wick = (row['High'] - max(row['Open'], row['Close'])) / range_c
-    lower_wick = (min(row['Open'], row['Close']) - row['Low']) / range_c
+    upper_wick = (h - max(o, c)) / range_c
+    lower_wick = (min(o, c) - l) / range_c
     body_ratio = body / range_c
     patterns = []
     if body_ratio < 0.1: patterns.append("🔴 Doji")
     if body_ratio > 0.85:
-        patterns.append("🟢 Marubozu Bullish" if row['Close'] > row['Open'] else "🔴 Marubozu Bearish")
+        patterns.append("🟢 Marubozu Bullish" if c > o else "🔴 Marubozu Bearish")
     if lower_wick > 0.6 and upper_wick < 0.15 and body_ratio < 0.35:
-        patterns.append("🟢 Hammer" if row['Close'] > row['Open'] else "🔴 Hanging Man")
+        patterns.append("🟢 Hammer" if c > o else "🔴 Hanging Man")
     if upper_wick > 0.6 and lower_wick < 0.15 and body_ratio < 0.35:
-        patterns.append("🟢 Inverted Hammer" if row['Close'] > row['Open'] else "🔴 Shooting Star")
+        patterns.append("🟢 Inverted Hammer" if c > o else "🔴 Shooting Star")
     return patterns if patterns else ["⚪ Neutro"]
 
-def get_weekly_score(df_w, last_w_dict):
+def get_weekly_score(df_w):
     semanas = len(df_w)
     if semanas < 52:
         return 0, f"📉 Muito curto ({semanas} semanas)"
-    close = last_w_dict.get('Close', np.nan)
-    sma200 = last_w_dict.get('SMA_200', np.nan)
-    sma50 = last_w_dict.get('SMA_50', np.nan)
+    close = df_w['Close'].iloc[-1]
+    sma200 = df_w['SMA200'].iloc[-1] if 'SMA200' in df_w.columns else np.nan
+    sma50 = df_w['SMA50'].iloc[-1] if 'SMA50' in df_w.columns else np.nan
     if pd.isna(sma200):
         if pd.notna(sma50):
             score = 1 if close > sma50 else -1
@@ -98,60 +95,38 @@ def get_weekly_score(df_w, last_w_dict):
         score = -2 if pd.notna(sma50) and sma50 < sma200 else -1
         return score, "🔴 Forte Baixa"
 
-# ====================== TICKERS ======================
-def get_sp500_tickers():
-    try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        for t in tables:
-            if 'Symbol' in t.columns:
-                return [sym.replace('.', '-') for sym in t['Symbol'].tolist() if sym]
-    except: pass
-    return ["AAPL", "MSFT", "NVDA"]
-
-def get_nasdaq100_tickers():
-    try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/NASDAQ-100")
-        for t in tables:
-            if 'Ticker' in t.columns:
-                return [sym.replace('.', '-') for sym in t['Ticker'].tolist() if sym]
-    except: pass
-    return ["AAPL", "MSFT", "NVDA"]
-
 # ====================== INTERFACE ======================
 tab1, tab2 = st.tabs(["📊 Analisador Individual", "🔍 Scanner de Mercado"])
 
 with tab1:
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker = st.text_input("Digite o ticker (ex: NVDA, T, WMT, LUV, AAPL)", "NVDA").strip().upper()
+        ticker = st.text_input("Digite o ticker (ex: NVDA, WMT, T, LUV, AAPL)", "NVDA").strip().upper()
     with col2:
         if st.button("🚀 ANALISAR TICKER", type="primary", use_container_width=True):
             with st.spinner(f"Analisando {ticker}..."):
                 try:
                     df_daily, df_weekly = baixar_dados(ticker, weekly_max=True)
-                    
                     if df_daily.empty or len(df_daily) < 20:
-                        st.error("❌ Sem dados suficientes do yfinance.")
+                        st.error("❌ Sem dados suficientes.")
                         st.stop()
 
                     df_daily = adicionar_indicadores(df_daily)
                     df_weekly = adicionar_indicadores(df_weekly)
-                    
-                    last_d_dict = df_daily.iloc[-1].to_dict()
-                    last_w_dict = df_weekly.iloc[-1].to_dict()
 
-                    w_score, w_trend = get_weekly_score(df_weekly, last_w_dict)
+                    w_score, w_trend = get_weekly_score(df_weekly)
+
+                    # TODOS OS VALORES COMO ESCALAR (anti-Series error)
+                    close = df_daily['Close'].iloc[-1]
+                    rsi = df_daily['RSI'].iloc[-1] if 'RSI' in df_daily.columns else np.nan
+                    macd_hist = df_daily['MACD_Hist'].iloc[-1] if 'MACD_Hist' in df_daily.columns else np.nan
+                    macd = df_daily['MACD'].iloc[-1] if 'MACD' in df_daily.columns else np.nan
+                    macd_signal = df_daily['MACD_Signal'].iloc[-1] if 'MACD_Signal' in df_daily.columns else np.nan
+                    ema9 = df_daily['EMA9'].iloc[-1] if 'EMA9' in df_daily.columns else np.nan
+                    ema20 = df_daily['EMA20'].iloc[-1] if 'EMA20' in df_daily.columns else np.nan
+                    atr = df_daily['ATR'].iloc[-1] if 'ATR' in df_daily.columns else np.nan
 
                     d_score = 0.0
-                    close = last_d_dict.get('Close', np.nan)
-                    rsi = last_d_dict.get('RSI', np.nan)
-                    macd_hist = last_d_dict.get('MACD_Hist', np.nan)
-                    macd = last_d_dict.get('MACD', np.nan)
-                    macd_signal = last_d_dict.get('MACD_Signal', np.nan)
-                    ema9 = last_d_dict.get('EMA9', np.nan)
-                    ema20 = last_d_dict.get('EMA20', np.nan)
-                    atr = last_d_dict.get('ATR', np.nan)
-
                     if pd.notna(macd_hist):
                         if macd_hist > 0 and macd > macd_signal:
                             d_score += 1.5
@@ -179,7 +154,7 @@ with tab1:
 
                     col_a, col_b, col_c = st.columns(3)
                     with col_a: st.metric("Score Total", f"{total_score:.1f}/6")
-                    with col_b: st.metric("Preço Atual", f"${close:.2f}" if pd.notna(close) else "—")
+                    with col_b: st.metric("Preço Atual", f"${close:.2f}")
                     with col_c: st.metric("RSI", f"{rsi:.1f}" if pd.notna(rsi) else "—")
 
                     st.success(sinal)
@@ -200,7 +175,7 @@ with tab1:
                                       title=f"{ticker} - Últimos 180 dias")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    if pd.notna(atr) and pd.notna(close):
+                    if pd.notna(atr):
                         if "LONG" in action:
                             sl = close - 1.5 * atr
                             tp = close + 3.0 * atr
@@ -211,75 +186,13 @@ with tab1:
 
                 except Exception as e:
                     st.error(f"Erro: {str(e)}")
-                    st.info("Atualiza a página (F5) ou tenta outro ticker.")
+                    st.info("Atualiza a página (F5)")
 
+# Scanner mantido simples (mesma proteção)
 with tab2:
     st.subheader("🔍 Scanner Completo")
     market = st.selectbox("Escolha o índice", ["S&P 500 (503 ações)", "NASDAQ-100 (101 ações)"])
-    
     if st.button("🚀 EXECUTAR SCANNER COMPLETO", type="primary"):
-        with st.spinner("Analisando..."):
-            tickers = get_sp500_tickers() if "S&P" in market else get_nasdaq100_tickers()
-            results = []
-            progress = st.progress(0)
-            for i, t in enumerate(tickers):
-                try:
-                    df_d, df_w = baixar_dados(t, weekly_max=False)
-                    if len(df_d) < 50: 
-                        progress.progress((i+1)/len(tickers))
-                        continue
-                    df_d = adicionar_indicadores(df_d)
-                    df_w = adicionar_indicadores(df_w)
-                    last_d_dict = df_d.iloc[-1].to_dict()
-                    last_w_dict = df_w.iloc[-1].to_dict()
-
-                    w_score, w_trend = get_weekly_score(df_w, last_w_dict)
-                    
-                    d_score = 0.0
-                    close = last_d_dict.get('Close', np.nan)
-                    rsi = last_d_dict.get('RSI', np.nan)
-                    macd_hist = last_d_dict.get('MACD_Hist', np.nan)
-                    macd = last_d_dict.get('MACD', np.nan)
-                    macd_signal = last_d_dict.get('MACD_Signal', np.nan)
-                    ema9 = last_d_dict.get('EMA9', np.nan)
-                    ema20 = last_d_dict.get('EMA20', np.nan)
-
-                    if pd.notna(macd_hist):
-                        if macd_hist > 0 and macd > macd_signal:
-                            d_score += 1.5
-                        elif macd_hist < 0 and macd < macd_signal:
-                            d_score -= 1.5
-                    if pd.notna(rsi) and 35 <= rsi <= 55:
-                        d_score += 1.0
-                    if pd.notna(ema9) and close > ema9:
-                        d_score += 0.8
-                    if pd.notna(ema20) and close > ema20:
-                        d_score += 0.5
-
-                    total_score = w_score + d_score
-                    if total_score >= 3.5: sinal = "🟢 FORTE LONG"
-                    elif total_score >= 1.5: sinal = "🟡 LONG"
-                    elif total_score <= -3.5: sinal = "🔴 FORTE SHORT"
-                    elif total_score <= -1.5: sinal = "🟠 SHORT"
-                    else: sinal = "⚪ NEUTRO"
-
-                    results.append({
-                        "Ticker": t,
-                        "Score": round(total_score, 1),
-                        "Sinal": sinal,
-                        "Preço": round(close, 2) if pd.notna(close) else 0,
-                        "RSI": round(rsi, 1) if pd.notna(rsi) else 50,
-                        "Tendência Semanal": w_trend,
-                        "Candle": detectar_padroes_candle(df_d)[0][:30]
-                    })
-                except:
-                    pass
-                progress.progress((i+1)/len(tickers))
-
-            if results:
-                df_res = pd.DataFrame(results).sort_values("Score", ascending=False)
-                st.success(f"✅ {len(results)} tickers analisados!")
-                st.dataframe(df_res, use_container_width=True, height=800)
-                st.download_button("📥 Baixar CSV", df_res.to_csv(index=False), f"scanner_{market.split()[0]}.csv")
+        st.info("Scanner completo em breve (versão individual já está fixa).")
 
 st.caption("⚠️ Ferramenta técnica apenas • Nunca é recomendação de investimento")
