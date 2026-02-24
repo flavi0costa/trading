@@ -37,11 +37,20 @@ with col_esq:
         preco_ent = st.number_input("Preço de Entrada ($/€)", value=100.0, format="%.2f")
         atr_val = st.number_input("Valor ATR (do Dashboard)", value=2.0, format="%.4f")
         
-        # Lógica Momentum (1.5x ATR para Stop, 3.0x ATR para TP2)
+    # Lógica Momentum (1.5x ATR para Stop)
         dist_sl = 1.5 * atr_val
+        
+        # Garantir que a distância do stop não é zero para evitar divisão por zero
+        if dist_sl > 0:
+            qtd_f = valor_risco_fin / dist_sl
+        else:
+            qtd_f = 0.0
+
         sl = preco_ent - dist_sl
         tp1 = preco_ent + dist_sl
         tp2 = preco_ent + (3.0 * atr_val)
+        
+        invest_t = qtd_f * preco_ent
         
         # Cálculo de Quantidade Fracionária (3 casas decimais)
         if dist_sl > 0:
