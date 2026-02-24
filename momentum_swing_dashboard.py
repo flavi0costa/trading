@@ -1,21 +1,18 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Momentum Swing Dashboard", layout="wide")
 st.title("🔥 Momentum Swing Dashboard - US Market")
-st.markdown("**Versão 100% estável • Corrigido bug de histórico**")
+st.markdown("**Versão FINAL estável • Testado com T, WMT, LUV**")
 
 # ====================== FUNÇÕES ======================
 @st.cache_data(ttl=3600)
 def baixar_dados(ticker, weekly_max=False):
     df_d = yf.download(ticker, period="1y", interval="1d", progress=False)
-    if weekly_max:
-        df_w = yf.download(ticker, period="max", interval="1wk", progress=False)
-    else:
-        df_w = yf.download(ticker, period="5y", interval="1wk", progress=False)
+    period_w = "max" if weekly_max else "5y"
+    df_w = yf.download(ticker, period=period_w, interval="1wk", progress=False)
     return df_d, df_w
 
 def adicionar_indicadores(df):
@@ -74,17 +71,23 @@ def detectar_padroes_candle(df):
 
 def get_weekly_score(df_w, last_w_dict):
     semanas = len(df_w)
-    if semanas < 200:
-        return 0, f"📉 Histórico curto ({semanas} semanas)"
+    if semanas < 52:
+        return 0, f"📉 Muito curto ({semanas} semanas)"
+    
     close = last_w_dict.get('Close')
     sma200 = last_w_dict.get('SMA_200')
     sma50 = last_w_dict.get('SMA_50')
-    if pd.isna(sma200) or pd.isna(close):
-        return 0, f"📉 SMA200 não calculada ({semanas} semanas)"
+    
+    if pd.isna(sma200):
+        if pd.notna(sma50):
+            score = 1 if close > sma50 else -1
+            return score, "🟡 SMA200 indisponível (usando SMA50)"
+        return 0, "📉 Sem médias longas"
+    
     if close > sma200:
-        return (2, "🟢 Forte Alta") if pd.notna(sma50) and sma50 > sma200 else (1, "🟢 Alta")
+        return (2 if pd.notna(sma50) and sma50 > sma200 else 1, "🟢 Forte Alta")
     else:
-        return (-2, "🔴 Forte Baixa") if pd.notna(sma50) and sma50 < sma200 else (-1, "🔴 Baixa")
+        return (-2 if pd.notna(sma50) and sma50 < sma200 else -1, "🔴 Forte Baixa")
 
 # ====================== TICKERS ======================
 def get_sp500_tickers():
@@ -111,12 +114,12 @@ tab1, tab2 = st.tabs(["📊 Analisador Individual", "🔍 Scanner de Mercado"])
 with tab1:
     col1, col2 = st.columns([3, 1])
     with col1:
-        ticker = st.text_input("Digite o ticker (ex: AAPL, TSLA, NVDA, AMZN)", "AAPL").strip().upper()
+        ticker = st.text_input("Digite o ticker (ex: T, WMT, LUV, AAPL)", "T").strip().upper()
     with col2:
         if st.button("🚀 ANALISAR TICKER", type="primary", use_container_width=True):
             with st.spinner(f"Analisando {ticker}..."):
                 try:
-                    df_daily, df_weekly = baixar_dados(ticker, weekly_max=True)  # ← MAX para semanal
+                    df_daily, df_weekly = baixar_dados(ticker, weekly_max=True)
                     
                     if df_daily.empty or len(df_daily) < 30:
                         st.error("❌ Ticker sem dados suficientes.")
@@ -129,7 +132,7 @@ with tab1:
 
                     w_score, w_trend = get_weekly_score(df_weekly, last_w_dict)
 
-                    # Score diário (mesmo seguro de antes)
+                    # Score diário seguro
                     d_score = 0.0
                     ld = last_d.to_dict()
                     macd_hist = ld.get('MACD_Hist')
@@ -157,7 +160,7 @@ with tab1:
 
                     st.subheader("📅 Análise Semanal")
                     st.write(f"**Tendência:** {w_trend}")
-                    st.write(f"**Semanas de dados semanais:** {len(df_weekly)}")
+                    st.write(f"**Semanas de dados semanais:** {len(df_weekly)}")   # ← aqui vês o número real!
                     st.write(f"**Score Semanal:** {w_score}")
 
                     col_a, col_b, col_c = st.columns(3)
@@ -168,11 +171,11 @@ with tab1:
                     st.success(sinal)
                     st.info(f"**Ação recomendada:** {action}")
 
-                    st.write("**Padrão de Candle:**")
+                    st.write("**Padrão de Candle (último dia):**")
                     for p in detectar_padroes_candle(df_daily):
                         st.write("•", p)
 
-                    st.subheader("📈 Gráfico Diário")
+                    st.subheader("📈 Gráfico Diário (180 dias)")
                     df_plot = df_daily.tail(180)
                     fig = go.Figure()
                     fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
@@ -187,17 +190,23 @@ with tab1:
                     if "LONG" in action:
                         sl = close - 1.5 * atr
                         tp = close + 3.0 * atr
-                        st.write(f"**Stop Loss:** ${sl:.2f} | **Take Profit:** ${tp:.2f} (RR 2:1)")
+                    elif "SHORT" in action:
+                        sl = close + 1.5 * atr
+                        tp = close - 3.0 * atr
+                    else:
+                        sl = tp = None
+                    if sl is not None:
+                        st.write(f"**Stop Loss:** ${sl:.2f} | **Take Profit:** ${tp:.2f} (RR ≈ 2:1)")
                 except Exception as e:
-                    st.error(f"Erro: {str(e)}")
-                    st.info("Tenta novamente ou usa outro ticker.")
+                    st.error(f"Erro inesperado: {str(e)}")
+                    st.info("Tenta novamente (às vezes yfinance demora).")
 
 with tab2:
     st.subheader("🔍 Scanner Completo")
     market = st.selectbox("Escolha o índice", ["S&P 500 (503 ações)", "NASDAQ-100 (101 ações)"])
     
     if st.button("🚀 EXECUTAR SCANNER COMPLETO", type="primary"):
-        with st.spinner("Analisando todos os tickers... (1-4 minutos)"):
+        with st.spinner("Analisando todos os tickers... (1-4 minutos na primeira vez)"):
             tickers = get_sp500_tickers() if "S&P" in market else get_nasdaq100_tickers()
             results = []
             progress = st.progress(0)
@@ -206,7 +215,7 @@ with tab2:
             for i, t in enumerate(tickers):
                 try:
                     df_d, df_w = baixar_dados(t, weekly_max=False)
-                    if len(df_d) < 50: 
+                    if len(df_d) < 50:
                         progress.progress((i+1)/total)
                         continue
                     df_d = adicionar_indicadores(df_d)
@@ -215,15 +224,50 @@ with tab2:
                     last_w_dict = df_w.iloc[-1].to_dict()
 
                     w_score, w_trend = get_weekly_score(df_w, last_w_dict)
-                    # ... (resto do score diário igual ao de cima, copiado do código anterior)
+                    
+                    d_score = 0.0
+                    ld = last_d.to_dict()
+                    macd_hist = ld.get('MACD_Hist')
+                    if isinstance(macd_hist, (int, float)) and pd.notna(macd_hist):
+                        if macd_hist > 0 and ld.get('MACD', 0) > ld.get('MACD_Signal', 0):
+                            d_score += 1.5
+                        elif macd_hist < 0 and ld.get('MACD', 0) < ld.get('MACD_Signal', 0):
+                            d_score -= 1.5
+                    rsi = ld.get('RSI')
+                    if isinstance(rsi, (int, float)) and pd.notna(rsi) and 35 <= rsi <= 55:
+                        d_score += 1.0
+                    close = ld.get('Close', 0)
+                    if isinstance(ld.get('EMA9'), (int, float)) and pd.notna(ld.get('EMA9')) and close > ld.get('EMA9'):
+                        d_score += 0.8
+                    if isinstance(ld.get('EMA20'), (int, float)) and pd.notna(ld.get('EMA20')) and close > ld.get('EMA20'):
+                        d_score += 0.5
 
-                    # (para não ficar gigante, o resto do scanner é idêntico à versão anterior)
-                    # ... copia o bloco de d_score, sinal, results.append do código anterior
+                    total_score = w_score + d_score
+                    if total_score >= 3.5: sinal = "🟢 FORTE LONG"
+                    elif total_score >= 1.5: sinal = "🟡 LONG"
+                    elif total_score <= -3.5: sinal = "🔴 FORTE SHORT"
+                    elif total_score <= -1.5: sinal = "🟠 SHORT"
+                    else: sinal = "⚪ NEUTRO"
 
+                    results.append({
+                        "Ticker": t,
+                        "Score": round(total_score, 1),
+                        "Sinal": sinal,
+                        "Preço": round(close, 2),
+                        "RSI": round(ld.get('RSI', 50), 1),
+                        "Tendência Semanal": w_trend,
+                        "Candle": detectar_padroes_candle(df_d)[0][:30]
+                    })
                 except:
                     pass
                 progress.progress((i+1)/total)
 
-            # ... resto do scanner igual
+            if results:
+                df_res = pd.DataFrame(results).sort_values("Score", ascending=False)
+                st.success(f"✅ {len(results)} tickers analisados com sucesso!")
+                st.dataframe(df_res, use_container_width=True, height=800)
+                st.download_button("📥 Baixar CSV", df_res.to_csv(index=False), f"scanner_{market.split()[0]}.csv")
+            else:
+                st.warning("Nenhum ticker retornou dados válidos.")
 
-st.caption("⚠️ Ferramenta técnica apenas. Nunca é recomendação de investimento.")
+st.caption("⚠️ Ferramenta técnica apenas • Nunca é recomendação de investimento • Gerencie risco")
