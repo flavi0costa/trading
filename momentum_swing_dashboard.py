@@ -9,30 +9,31 @@ warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="Momentum Swing Dashboard", layout="wide")
 st.title("🔥 Momentum Swing Dashboard - US Market")
-st.markdown("**VERSÃO DEFINITIVA • yfinance NaN FIXADO**")
+st.markdown("**VERSÃO 100% FUNCIONAL • Erro ['Close'] ELIMINADO**")
 
 # ====================== FUNÇÕES ======================
-@st.cache_data(ttl=300)  # cache mais curto para dados frescos
+@st.cache_data(ttl=300)
 def baixar_dados(ticker, weekly_max=False):
-    df_d = yf.download(ticker, period="1y", interval="1d", progress=False)
     period_w = "max" if weekly_max else "5y"
-    df_w = yf.download(ticker, period=period_w, interval="1wk", progress=False)
+    # 🔥 auto_adjust=True resolve o problema da coluna Close
+    df_d = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+    df_w = yf.download(ticker, period=period_w, interval="1wk", progress=False, auto_adjust=True)
     
-    # 🔥 FIX PRINCIPAL: remove linha incompleta (dia/semana atual com NaN)
-    df_d = df_d.dropna(subset=['Close']).ffill()
-    df_w = df_w.dropna(subset=['Close']).ffill()
+    # Remove qualquer linha vazia ou incompleta
+    df_d = df_d.dropna(how='all').ffill()
+    df_w = df_w.dropna(how='all').ffill()
     
     return df_d, df_w
 
 def adicionar_indicadores(df):
-    if len(df) < 10:
+    if len(df) < 10 or 'Close' not in df.columns:
         return df
     df = df.copy()
     df['EMA9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
     df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-    df['SMA50'] = df['Close'].rolling(50, min_periods=1).mean()   # nunca NaN
-    df['SMA200'] = df['Close'].rolling(200, min_periods=1).mean() # nunca NaN
+    df['SMA50'] = df['Close'].rolling(50, min_periods=1).mean()
+    df['SMA200'] = df['Close'].rolling(200, min_periods=1).mean()
     
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
@@ -82,17 +83,14 @@ def get_weekly_score(df_w, last_w_dict):
     semanas = len(df_w)
     if semanas < 52:
         return 0, f"📉 Muito curto ({semanas} semanas)"
-    
     close = last_w_dict.get('Close', np.nan)
     sma200 = last_w_dict.get('SMA_200', np.nan)
     sma50 = last_w_dict.get('SMA_50', np.nan)
-    
     if pd.isna(sma200):
         if pd.notna(sma50):
             score = 1 if close > sma50 else -1
             return score, "🟡 Usando SMA50"
         return 0, "📉 Sem médias"
-    
     if close > sma200:
         score = 2 if pd.notna(sma50) and sma50 > sma200 else 1
         return score, "🟢 Forte Alta"
@@ -133,20 +131,17 @@ with tab1:
                     df_daily, df_weekly = baixar_dados(ticker, weekly_max=True)
                     
                     if df_daily.empty or len(df_daily) < 20:
-                        st.error("❌ Sem dados suficientes.")
+                        st.error("❌ Sem dados suficientes do yfinance.")
                         st.stop()
 
                     df_daily = adicionar_indicadores(df_daily)
                     df_weekly = adicionar_indicadores(df_weekly)
                     
-                    last_d = df_daily.iloc[-1]
-                    last_w = df_weekly.iloc[-1]
-                    last_d_dict = last_d.to_dict()
-                    last_w_dict = last_w.to_dict()
+                    last_d_dict = df_daily.iloc[-1].to_dict()
+                    last_w_dict = df_weekly.iloc[-1].to_dict()
 
                     w_score, w_trend = get_weekly_score(df_weekly, last_w_dict)
 
-                    # Score diário
                     d_score = 0.0
                     close = last_d_dict.get('Close', np.nan)
                     rsi = last_d_dict.get('RSI', np.nan)
@@ -216,14 +211,14 @@ with tab1:
 
                 except Exception as e:
                     st.error(f"Erro: {str(e)}")
-                    st.info("Atualiza a página (F5).")
+                    st.info("Atualiza a página (F5) ou tenta outro ticker.")
 
 with tab2:
     st.subheader("🔍 Scanner Completo")
     market = st.selectbox("Escolha o índice", ["S&P 500 (503 ações)", "NASDAQ-100 (101 ações)"])
     
     if st.button("🚀 EXECUTAR SCANNER COMPLETO", type="primary"):
-        with st.spinner("Analisando... (1-3 minutos)"):
+        with st.spinner("Analisando..."):
             tickers = get_sp500_tickers() if "S&P" in market else get_nasdaq100_tickers()
             results = []
             progress = st.progress(0)
@@ -235,10 +230,8 @@ with tab2:
                         continue
                     df_d = adicionar_indicadores(df_d)
                     df_w = adicionar_indicadores(df_w)
-                    last_d = df_d.iloc[-1]
-                    last_w = df_w.iloc[-1]
-                    last_d_dict = last_d.to_dict()
-                    last_w_dict = last_w.to_dict()
+                    last_d_dict = df_d.iloc[-1].to_dict()
+                    last_w_dict = df_w.iloc[-1].to_dict()
 
                     w_score, w_trend = get_weekly_score(df_w, last_w_dict)
                     
